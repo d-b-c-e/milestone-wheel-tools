@@ -6,9 +6,16 @@ been verified, and which traps cost real debugging time.
 
 ## The one-line summary
 
-Milestone's UE4 racing games ship no telemetry and refuse direct-drive wheels.
-A `dinput8.dll` proxy beside the game exe fixes the wheel and manufactures
-telemetry from three sources, emitting it as Forza "Data Out" UDP.
+Milestone's UE4 racing games refuse direct-drive wheels, cannot rebind controls
+with one attached, and ship no telemetry. A `dinput8.dll` proxy beside the game
+exe fixes the wheel and manufactures telemetry from three sources, emitting it
+as Forza "Data Out" UDP; `WheelSetup.ps1` handles control mapping from outside
+the game entirely.
+
+The repo is `milestone-wheel-tools` - renamed from `milestone-telemetry`, since
+the wheel fix is the more widely useful half. The config and log files are
+still `milestone_mod.ini` / `milestone_mod.log`; renaming those would break
+every existing install.
 
 ## Architecture
 
@@ -20,6 +27,8 @@ Four modules in one DLL. They are independent and can be worked on separately.
 | `src/fmod_tap.cpp` | engine-audio parameters | hooks the delay-load IAT |
 | `src/ue4.cpp` | RPM / gear from the HUD | UE4 reflection, no signatures |
 | `src/telemetry.cpp` | assemble and send packets | 60 Hz thread, reads shared atomics |
+| `WheelSetup.ps1` | map controls, calibrate pedals | drives `tools/wheelprobe`, parses `settings.sav` |
+| `tools/wheelprobe/` | live 128-button / 8-axis reader | `c_dfDIJoystick2`, which PowerShell cannot reach |
 
 All taps are **observe-only**. The single thing altered in the game's view of
 the world is `dwDevType`. Hooks run on the game's threads and publish into

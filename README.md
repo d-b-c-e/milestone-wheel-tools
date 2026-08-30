@@ -1,20 +1,23 @@
-# milestone-telemetry
+# milestone-wheel-tools
 
-**Wheel support and live telemetry for Milestone's UE4 racing games.**
+**Make direct-drive wheels work with Milestone's UE4 racing games — and add the
+telemetry they never shipped.**
 
-Milestone's racers — Gravel, MXGP, MotoGP, Ride, Supercross — ship **no
-telemetry at all**, and they refuse modern direct-drive wheels outright. This
-adds both, from the outside, with one DLL.
+Gravel, MXGP, MotoGP, Ride and Supercross all refuse modern direct-drive
+wheels, have a rebind screen that cannot be used with one, and expose **no
+telemetry at all**. This fixes all three from the outside.
 
-Drop it next to the game and you get a working dashboard, force feedback, and
-real physics for your bass shakers in SimHub.
+| you want | run |
+|---|---|
+| the game to see your wheel, and telemetry in SimHub | `.\Install.ps1` |
+| to map controls without fighting the in-game menu | `.\WheelSetup.ps1` |
 
-```powershell
-.\Install.ps1
-```
+Both detect your wheel and find the game themselves. There is nothing to
+configure by hand.
 
-That finds the game, detects your wheel, writes the config and tells you what
-to set in SimHub. There is nothing else to configure.
+> **Wheel not detected in Gravel?** That is the first thing this fixes — see
+> [what it actually does](#what-it-actually-does) below, or jump to
+> [troubleshooting](docs/troubleshooting.md).
 
 ---
 
@@ -187,6 +190,9 @@ A 32-bit game needs a 32-bit build.
 
 | tool | purpose |
 |---|---|
+| `WheelSetup.ps1` | map controls and calibrate pedals without the in-game menu |
+| `Install.ps1` / `Uninstall.ps1` | install or remove the mod, detecting game and wheel |
+| `tools/wheelprobe/` | native helper that reads all 128 buttons and 8 axes live |
 | `tools/forza_listen.py` | decode and print the packets — validate without SimHub |
 | `tools/Measure-WheelAxes.ps1` | walks you through each pedal, works out which axis moves and which way, prints the config lines |
 | `tools/wheelconfig.py` | add or update a device in `WheelConfig.ini` (CRLF-safe, clones a shipped block) |
