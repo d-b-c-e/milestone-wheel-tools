@@ -16,7 +16,9 @@ import time
 port = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 5300
 raw = "--raw" in sys.argv
 # a \r-refreshed line is right for a terminal; a file wants real lines
-EOL = "\r" if sys.stdout.isatty() else "\n"
+# A \r-refreshed line suits a terminal; a captured file needs real newlines.
+# --lines forces them even under a harness that hands us a pseudo-terminal.
+EOL = "\n" if ("--lines" in sys.argv or not sys.stdout.isatty()) else "\r"
 
 SLED = "<iIfff fff fff fff fff 4f4f4f 4i 4f4f4f4f4f iiiii"
 DASH = "<fff fff 4f fff ffff H B BBBBB b bb"
@@ -66,7 +68,7 @@ try:
             speed = gear = accel = brake = clutch = hb = steer = 0
         if n % 6 == 0 or raw:
             print(f"{fmt:<4} {race:<4} {rpm:6.0f}/{maxrpm:<6.0f} {speed:7.2f} {gear:>4} {steer:>6} "
-                  f"{accel:>4} {brake:>4} {hb:>4} {accX:6.2f} {accZ:6.2f} {rumble:6.2f} {pps:>4}", end="\r")
+                  f"{accel:>4} {brake:>4} {hb:>4} {accX:6.2f} {accZ:6.2f} {rumble:6.2f} {pps:>4}", end=EOL, flush=True)
         if raw:
             print()
             names = ("isRaceOn timestampMs maxRpm idleRpm rpm accX accY accZ velX velY velZ angX angY angZ "

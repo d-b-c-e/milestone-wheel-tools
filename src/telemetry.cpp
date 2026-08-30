@@ -181,8 +181,17 @@ static DWORD WINAPI telemetryThread(LPVOID)
         sl.engineMaxRpm = maxRpm; sl.engineIdleRpm = maxRpm * 0.12f; sl.currentEngineRpm = rpm;
         sl.accX = -cf * 9.81f; sl.accZ = accZ; sl.velZ = speed;
         // Real physics channels, straight off the engine-audio parameters.
-        float lat = g_fmod.latSlip.load(), lon = g_fmod.longSlip.load();
-        float susp = g_fmod.susp.load(), torque = g_fmod.load >= 0 ? g_fmod.load.load() : 0.f;
+        // FMOD stops updating the moment a race ends, so the last in-race values
+        // would otherwise persist through the menus - a shaker driven from them
+        // would sit on a constant output. No live vehicle means no physics.
+        float lat = 0.f, lon = 0.f, susp = 0.f, torque = 0.f;
+        if (ue) {
+            lat = g_fmod.latSlip.load(); lon = g_fmod.longSlip.load();
+            susp = g_fmod.susp.load();
+            torque = g_fmod.load >= 0 ? g_fmod.load.load() : 0.f;
+        } else {
+            speed = 0.f;
+        }
         float combined = sqrtf(lat * lat + lon * lon);
         if (susp > 0.f) rumble = susp;          // suspension beats an FFB guess
         for (int i = 0; i < 4; ++i) {
