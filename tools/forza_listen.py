@@ -6,6 +6,7 @@ three variants (sled 232 B, fm7 311 B, fh4 324 B) by packet length.
 
     python forza_listen.py            # port 5300
     python forza_listen.py 5300 --raw # dump every field of each packet
+    python forza_listen.py 5301 --lines > capture.txt   # one line per sample
 """
 import socket
 import struct
@@ -56,8 +57,11 @@ try:
         elif L == 324:
             d = struct.unpack_from(DASH, data, 244)
         if d:
-            speed, gear = d[3], d[20]
-            accel, brake, clutch, hb, steer = d[16], d[17], d[18], d[19], d[21]
+            # dash tuple: 0-2 pos, 3 speed, 4 power, 5 torque, 6-9 tyre temps, 10 boost,
+            # 11 fuel, 12 dist, 13-16 laps/race time, 17 lap#, 18 position,
+            # 19 accel, 20 brake, 21 clutch, 22 handbrake, 23 gear, 24 steer
+            speed, gear = d[3], d[23]
+            accel, brake, clutch, hb, steer = d[19], d[20], d[21], d[22], d[24]
         else:
             speed = gear = accel = brake = clutch = hb = steer = 0
         if n % 6 == 0 or raw:
