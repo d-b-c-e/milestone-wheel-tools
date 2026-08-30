@@ -1,0 +1,94 @@
+# Milestone's wheel whitelist and binding model
+
+Milestone's UE4 racers (Gravel, MXGP, MotoGP, Ride, Supercross) use a
+two-layer input model. Neither layer is reachable from the in-game rebind
+screen when the wheel is misbehaving, but both are plain files.
+
+## Layer 1 — `WheelConfig.ini`: physical button → logical slot
+
+```
+<game>\<game>\Config\WindowsNoEditor\WheelConfig.ini
+```
+
+One section per supported device, keyed by `<PID><VID>` in lowercase hex.
+The Logitech G920 (VID `046D`, PID `C262`) is `[/Wheel.Config/c262046d]`. The
+game builds the key at runtime as `/Wheel.Config/%08x` from
+`guidProduct.Data1`, which is why it matches the DirectInput product key.
+
+A device not in the file gets **no wheel option at all**. Gravel ships 32
+devices, all pre-2018; no direct-drive base is present. `tools/wheelconfig.py`
+adds one by cloning a shipped block so every field the parser expects is
+present, in order.
+
+### Axis numbering
+
+Derived from the shipped data (cross-checked on the G29, the Fanatec
+ClubSport base and the ClubSport V3 pedals), not from documentation:
+
+```
+Axis1=X  Axis2=Y  Axis3=Z  Axis4=Rx  Axis5=Ry  Axis6=Rz  Axis7=Slider0  Axis8=Slider1
+```
+
+### Polarity — the trap
+
+Each pedal line ends in `&scale&offset`, mapping the axis's 0..1 travel onto
+the game's pedal: released must give 0.0, pressed 1.0.
+
+| pedal idles at | use          | who                    |
+|----------------|--------------|------------------------|
+| minimum (0)    | `&1.0&0.0`   | MOZA                   |
+| maximum        | `&-1.0&1.0`  | Logitech, Fanatec      |
+
+Copying a Logitech block onto a MOZA leaves the game convinced a pedal is
+permanently held. It will drive, but the rebind screen breaks: the "press a
+control" listener latches onto the stuck axis and never sees the button.
+**Measure, don't guess** — `tools/Measure-WheelAxes.ps1` records which axis
+each pedal moves and which way, and prints the lines.
+
+MOZA R12, measured 2026-08-29:
+
+```
+Wheel_Steer=Axis1&1.0&0.0
+Wheel_Accelerator=Axis3&1.0&0.0
+Wheel_Brake=Axis6&1.0&0.0
+Wheel_Handbrake=Axis7&1.0&0.0
+```
+
+Buttons are `ButtonN`, 1-indexed as in joy.cpl. Gravel reads
+**DIJOYSTATE2** (confirmed by the proxy's `SetDataFormat` log), so buttons
+above 32 are reachable.
+
+## Layer 2 — `settings.sav`: logical slot → action
+
+```
+%LOCALAPPDATA%\<Game>\Saved\SaveGames\settings.sav
+```
+
+A UE4 GVAS save. Its `ignitioninput` block holds every binding as
+`ActionName` → `KeyName`, where the key is a keyboard key, a `Gamepad_*` key,
+or a `Wheel_*` slot from layer 1. `tools/dump_bindings.py` prints the table.
+
+This is what makes config-file binding possible: find which `Wheel_*` slot
+the action listens to, then put the button on that slot in layer 1. Gravel's
+defaults hold some surprises:
+
+| action           | listens to              | note                                   |
+|------------------|-------------------------|----------------------------------------|
+| `GearUp`         | `Wheel_RightShoulder`   | **not** `Wheel_GearUp`, which nothing reads |
+| `GearDown`       | `Wheel_LeftShoulder`    |                                        |
+| `Handbrake`      | `Wheel_RightTrigger`    | a button; the `Wheel_Handbrake` axis is unused |
+| `RewindActivate` | `Wheel_LeftTrigger`     |                                        |
+| `SwitchCamera`   | `Wheel_Special_Left`    |                                        |
+| `Confirm`        | `Wheel_FaceButton_Bottom` |                                      |
+| `Back`           | `Wheel_FaceButton_Right` |                                       |
+
+## Housekeeping
+
+- The file is **CRLF**. A `.*?$` regex eats the `\r` and converts every
+  edited line to a bare LF. Match `[^\r\n]*` instead.
+- The game **rewrites `WheelConfig.ini` on exit**. Edit only while it is
+  closed.
+- Steam's *Verify integrity of game files* restores the stock file. Keep a
+  copy of the edited one.
+- Gravel writes no logs of its own; the proxy's `milestone_mod.log` is the
+  only diagnostic.

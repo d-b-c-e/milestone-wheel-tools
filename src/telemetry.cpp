@@ -1,0 +1,220 @@
+// Telemetry thread: fold InputState / FfbState / FmodState / Ue4State into
+// Forza "Data Out" packets and send them over UDP at a fixed rate.
+//
+// WHY FORZA'S FORMAT
+// Nothing here is Forza-specific; the packet is just the most widely parsed
+// telemetry layout there is. SimHub, SimRacingStudio, ShakeIt, dashboards,
+// motion software - all speak it. Emitting it means zero integration work
+// on the receiving side. Three variants, selectable in the ini:
+//   sled  232 B  the original v1 packet (physics only)
+//   fm7   311 B  sled + "car dash" block (speed, gear, pedals, laps)
+//   fh4   324 B  fm7 with Horizon's 12 unknown bytes inserted after the sled
+//
+// WHAT IS REAL AND WHAT IS DERIVED
+//   measured  steer, throttle, brake, clutch, handbrake  (game's own reads)
+//             constant / periodic force            (game's own FFB output)
+//             rpm, max rpm, speed, gear           (UE4 HUD values, if found)
+//   derived   longitudinal accel  = d(speed)/dt
+//             lateral accel       = -constant force  (steering torque proxy)
+//             surface rumble      = periodic force, or jerk of constant force
+//             wheel rotation      = speed / 0.33 m
+// Derived fields exist so effect engines have something to key on; the log
+// and the listener tool always show the raw channels for calibration.
+#include "common.h"
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <cmath>
+#include <cstdarg>
+
+Config     g_cfg;
+InputState g_input;
+FfbState   g_ffb;
+FmodState  g_fmod;
+Ue4State   g_ue4;
+
+void fmodDumpDiscovery();
+
+// ------------------------------------------------------------------ utils
+void sidecarPath(char *out, const char *leaf)
+{
+    GetModuleFileNameA(nullptr, out, MAX_PATH);
+    char *s = strrchr(out, '\\');
+    if (s) strcpy(s + 1, leaf); else strcpy(out, leaf);
+}
+
+static CRITICAL_SECTION g_logLock;
+static bool g_logInit = false;
+void logf(const char *fmt, ...)
+{
+    if (!g_cfg.log) return;
+    if (!g_logInit) { InitializeCriticalSection(&g_logLock); g_logInit = true; }
+    char path[MAX_PATH]; sidecarPath(path, "milestone_mod.log");
+    EnterCriticalSection(&g_logLock);
+    if (FILE *f = fopen(path, "a")) {
+        SYSTEMTIME t; GetLocalTime(&t);
+        fprintf(f, "%02d:%02d:%02d.%03d ", t.wHour, t.wMinute, t.wSecond, t.wMilliseconds);
+        va_list ap; va_start(ap, fmt); vfprintf(f, fmt, ap); va_end(ap);
+        fputc('\n', f); fclose(f);
+    }
+    LeaveCriticalSection(&g_logLock);
+}
+
+bool safeRead(const void *addr, void *out, size_t n)
+{
+    SIZE_T got = 0;
+    return addr && ReadProcessMemory(GetCurrentProcess(), addr, out, n, &got) && got == n;
+}
+
+static void iniStr(const char *ini, const char *sec, const char *key, char *out, int n)
+{
+    char buf[256];
+    if (GetPrivateProfileStringA(sec, key, "\x01", buf, sizeof buf, ini) && buf[0] != '\x01') { strncpy(out, buf, n - 1); out[n - 1] = 0; }
+}
+static int iniInt(const char *ini, const char *sec, const char *key, int def) { return GetPrivateProfileIntA(sec, key, def, ini); }
+static float iniFloat(const char *ini, const char *sec, const char *key, float def)
+{
+    char b[64] = ""; iniStr(ini, sec, key, b, sizeof b); return b[0] ? (float)atof(b) : def;
+}
+
+void loadConfig()
+{
+    char ini[MAX_PATH]; sidecarPath(ini, "milestone_mod.ini");
+    char hex[32] = ""; iniStr(ini, "proxy", "product", hex, sizeof hex);
+    if (hex[0]) g_cfg.product = (uint32_t)strtoul(hex, nullptr, 16);
+    g_cfg.retype = iniInt(ini, "proxy", "retype", 1) != 0;
+    g_cfg.log = iniInt(ini, "proxy", "log", 0) != 0;
+    g_cfg.enabled = iniInt(ini, "telemetry", "enabled", 1) != 0;
+    iniStr(ini, "telemetry", "host", g_cfg.host, sizeof g_cfg.host);
+    g_cfg.port = iniInt(ini, "telemetry", "port", 5300);
+    g_cfg.mirrorPort = iniInt(ini, "telemetry", "mirror_port", 0);
+    iniStr(ini, "telemetry", "format", g_cfg.format, sizeof g_cfg.format);
+    g_cfg.rate = iniInt(ini, "telemetry", "rate", 60);
+    iniStr(ini, "telemetry", "race_on", g_cfg.raceOn, sizeof g_cfg.raceOn);
+    iniStr(ini, "input", "steer", g_cfg.steer, sizeof g_cfg.steer);
+    iniStr(ini, "input", "throttle", g_cfg.throttle, sizeof g_cfg.throttle);
+    iniStr(ini, "input", "brake", g_cfg.brake, sizeof g_cfg.brake);
+    iniStr(ini, "input", "handbrake", g_cfg.handbrake, sizeof g_cfg.handbrake);
+    iniStr(ini, "input", "clutch", g_cfg.clutch, sizeof g_cfg.clutch);
+    g_cfg.ffbGain = iniFloat(ini, "ffb", "gain", 1.0f);
+    g_cfg.fmodDiscover = iniInt(ini, "fmod", "discover", 1) != 0;
+    iniStr(ini, "fmod", "rpm", g_cfg.fmodRpm, sizeof g_cfg.fmodRpm);
+    iniStr(ini, "fmod", "load", g_cfg.fmodLoad, sizeof g_cfg.fmodLoad);
+    iniStr(ini, "fmod", "speed", g_cfg.fmodSpeed, sizeof g_cfg.fmodSpeed);
+    g_cfg.ue4Enabled = iniInt(ini, "ue4", "enabled", 1) != 0;
+    g_cfg.ue4Discover = iniInt(ini, "ue4", "discover", 1) != 0;
+    iniStr(ini, "ue4", "rpm", g_cfg.ue4Rpm, sizeof g_cfg.ue4Rpm);
+    iniStr(ini, "ue4", "maxrpm", g_cfg.ue4MaxRpm, sizeof g_cfg.ue4MaxRpm);
+    iniStr(ini, "ue4", "speed", g_cfg.ue4Speed, sizeof g_cfg.ue4Speed);
+    iniStr(ini, "ue4", "gear", g_cfg.ue4Gear, sizeof g_cfg.ue4Gear);
+    g_cfg.speedScale = iniFloat(ini, "ue4", "speed_scale", 1.0f / 3.6f);
+    g_cfg.gearOffset = iniInt(ini, "ue4", "gear_offset", 0);
+}
+
+// ------------------------------------------------------------ forza packet
+#pragma pack(push, 1)
+struct Sled {
+    int32_t  isRaceOn; uint32_t timestampMs;
+    float engineMaxRpm, engineIdleRpm, currentEngineRpm;
+    float accX, accY, accZ, velX, velY, velZ, angX, angY, angZ, yaw, pitch, roll;
+    float normSusp[4], slipRatio[4], wheelRotSpeed[4];
+    int32_t onRumble[4];
+    float puddle[4], surfaceRumble[4], slipAngle[4], combinedSlip[4], suspTravel[4];
+    int32_t carOrdinal, carClass, carPI, drivetrain, cylinders;
+};
+struct Dash {
+    float posX, posY, posZ, speed, power, torque;
+    float tireTemp[4];
+    float boost, fuel, distance, bestLap, lastLap, currentLap, currentRaceTime;
+    uint16_t lapNumber; uint8_t racePosition;
+    uint8_t accel, brake, clutch, handbrake, gear; int8_t steer;
+    int8_t drivingLine, aiBrakeDiff;
+};
+#pragma pack(pop)
+static_assert(sizeof(Sled) == 232, "sled must be 232 bytes");
+static_assert(sizeof(Dash) == 79, "dash must be 79 bytes");
+
+static uint8_t u8(float f) { f = f < 0 ? 0 : f > 1 ? 1 : f; return (uint8_t)(f * 255.f + 0.5f); }
+
+static DWORD WINAPI telemetryThread(LPVOID)
+{
+    WSADATA w; WSAStartup(MAKEWORD(2, 2), &w);
+    SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    sockaddr_in to{}; to.sin_family = AF_INET; to.sin_port = htons((u_short)g_cfg.port);
+    inet_pton(AF_INET, g_cfg.host, &to.sin_addr);
+    sockaddr_in mirror = to; mirror.sin_port = htons((u_short)g_cfg.mirrorPort);
+    const bool dash = _stricmp(g_cfg.format, "sled") != 0, fh4 = _stricmp(g_cfg.format, "fh4") == 0;
+    const int rate = g_cfg.rate > 0 ? g_cfg.rate : 60;
+    const float dt = 1.f / rate;
+    logf("[tx] %s -> %s:%d at %d Hz", g_cfg.format, g_cfg.host, g_cfg.port, rate);
+
+    uint8_t pkt[324]; float prevSpeed = 0, prevConst = 0; ULONGLONG nextStatus = 0, nextDump = 0;
+    LARGE_INTEGER freq, t0; QueryPerformanceFrequency(&freq); QueryPerformanceCounter(&t0);
+    uint64_t tick = 0;
+    for (;; ++tick) {
+        // pace to the target rate without drifting
+        LARGE_INTEGER now; QueryPerformanceCounter(&now);
+        double due = double(tick) / rate, elapsed = double(now.QuadPart - t0.QuadPart) / freq.QuadPart;
+        if (due > elapsed) Sleep((DWORD)((due - elapsed) * 1000));
+
+        bool ue = ue4Poll();
+        float speed = ue ? g_ue4.speed.load() * g_cfg.speedScale : 0.f;   // m/s
+        float rpm = ue ? g_ue4.rpm.load() : (g_fmod.rpm >= 0 ? g_fmod.rpm.load() : 0.f);
+        float maxRpm = ue && g_ue4.maxRpm > 0 ? g_ue4.maxRpm.load() : 8000.f;
+        float cf = g_ffb.constant.load(), pf = g_ffb.periodic.load();
+        float accZ = (speed - prevSpeed) / dt; prevSpeed = speed;
+        float jerk = fabsf(cf - prevConst) / dt; prevConst = cf;
+        float rumble = pf > 0.f ? pf : (jerk > 1.f ? 1.f : jerk);
+        int gear = ue ? g_ue4.gear.load() + g_cfg.gearOffset : 0;
+
+        Sled sl{}; Dash d{};
+        sl.isRaceOn = (_stricmp(g_cfg.raceOn, "always") == 0) ? 1 : (ue ? 1 : 0);
+        sl.timestampMs = GetTickCount();
+        sl.engineMaxRpm = maxRpm; sl.engineIdleRpm = maxRpm * 0.12f; sl.currentEngineRpm = rpm;
+        sl.accX = -cf * 9.81f; sl.accZ = accZ; sl.velZ = speed;
+        for (int i = 0; i < 4; ++i) {
+            sl.wheelRotSpeed[i] = speed / 0.33f;
+            sl.surfaceRumble[i] = rumble;
+            sl.onRumble[i] = pf > 0.5f ? 1 : 0;
+            sl.normSusp[i] = 0.5f;
+        }
+        sl.drivetrain = 2; sl.cylinders = 4;
+        d.speed = speed; d.gear = (uint8_t)(gear < 0 ? 0 : gear > 10 ? 10 : gear);
+        d.accel = u8(g_input.throttle); d.brake = u8(g_input.brake); d.clutch = u8(g_input.clutch);
+        d.handbrake = u8(g_input.handbrake);
+        float st = g_input.steer.load(); st = st < -1 ? -1 : st > 1 ? 1 : st;
+        d.steer = (int8_t)(st * 127.f);
+
+        int n = 0;
+        memcpy(pkt, &sl, sizeof sl); n += sizeof sl;
+        if (dash) {
+            if (fh4) { memset(pkt + n, 0, 12); n += 12; }
+            memcpy(pkt + n, &d, sizeof d); n += sizeof d;
+        }
+        int rc = sendto(s, (const char *)pkt, n, 0, (sockaddr *)&to, sizeof to);
+        static int lastRc = -2, lastErr = 0;
+        if (rc != lastRc) { lastRc = rc; lastErr = rc < 0 ? WSAGetLastError() : 0;
+                            logf("[tx] sendto -> %d (err %d) socket %d mirror %d", rc, lastErr, (int)s, g_cfg.mirrorPort); }
+        if (g_cfg.mirrorPort) sendto(s, (const char *)pkt, n, 0, (sockaddr *)&mirror, sizeof mirror);
+
+        ULONGLONG ms = GetTickCount64();
+        if (ms >= nextStatus) {
+            nextStatus = ms + 5000;
+            logf("[tx] input:%s(%u reads) ffb:%s(%u upd, %u eff) fmod:%s(%u calls) ue4:%s%s | steer %.2f thr %.2f brk %.2f hb %.2f (raw %d %d %d) | cf %.2f pf %.2f | rpm %.0f/%.0f spd %.1f gear %d",
+                 g_input.live ? "live" : "-", (unsigned)g_input.reads.load(), g_ffb.live ? "live" : "-",
+                 (unsigned)g_ffb.updates.load(), (unsigned)g_ffb.effects.load(), g_fmod.live ? "live" : "-",
+                 (unsigned)g_fmod.calls.load(), g_ue4.ready ? "ready" : "-", ue ? "+live" : "",
+                 g_input.steer.load(), g_input.throttle.load(), g_input.brake.load(), g_input.handbrake.load(),
+                 g_input.rawSteer.load(), g_input.rawThr.load(), g_input.rawBrk.load(),
+                 cf, pf, rpm, maxRpm, speed, gear);
+        }
+        if (ms >= nextDump) { nextDump = ms + 30000; fmodDumpDiscovery(); }
+    }
+}
+
+void telemetryStart()
+{
+    static bool started = false;
+    if (started) return;
+    started = true;
+    CreateThread(nullptr, 0, telemetryThread, nullptr, 0, nullptr);
+}
