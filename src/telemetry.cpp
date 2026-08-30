@@ -104,6 +104,10 @@ void loadConfig()
     iniStr(ini, "fmod", "longitudinal_slip", g_cfg.fmodLongSlip, sizeof g_cfg.fmodLongSlip);
     iniStr(ini, "fmod", "suspension", g_cfg.fmodSusp, sizeof g_cfg.fmodSusp);
     iniStr(ini, "fmod", "braking", g_cfg.fmodBraking, sizeof g_cfg.fmodBraking);
+    iniStr(ini, "fmod", "impact", g_cfg.fmodImpact, sizeof g_cfg.fmodImpact);
+    iniStr(ini, "fmod", "impact_velocity", g_cfg.fmodImpactVel, sizeof g_cfg.fmodImpactVel);
+    g_cfg.impactGain = iniFloat(ini, "fmod", "impact_gain", 25.0f);
+    g_cfg.impactDecayMs = iniInt(ini, "fmod", "impact_decay_ms", 150);
     g_cfg.fmodSpeedScale = iniFloat(ini, "fmod", "speed_scale", 55.0f);
     g_cfg.ue4Enabled = iniInt(ini, "ue4", "enabled", 1) != 0;
     g_cfg.ue4Discover = iniInt(ini, "ue4", "discover", 1) != 0;
@@ -153,6 +157,7 @@ static DWORD WINAPI telemetryThread(LPVOID)
     logf("[tx] %s -> %s:%d at %d Hz", g_cfg.format, g_cfg.host, g_cfg.port, rate);
 
     uint8_t pkt[324]; float prevSpeed = 0, prevConst = 0; ULONGLONG nextStatus = 0, nextDump = 0;
+    uint32_t lastImpactSeq = 0; ULONGLONG impactAt = 0; float impactMag = 0.f;
     LARGE_INTEGER freq, t0; QueryPerformanceFrequency(&freq); QueryPerformanceCounter(&t0);
     uint64_t tick = 0;
     for (;; ++tick) {
@@ -171,6 +176,23 @@ static DWORD WINAPI telemetryThread(LPVOID)
         float maxRpm = ue && g_ue4.maxRpm > 0 ? g_ue4.maxRpm.load() : 8000.f;
         float cf = g_ffb.constant.load(), pf = g_ffb.periodic.load();
         float accZ = (speed - prevSpeed) / dt; prevSpeed = speed;
+        // A collision becomes a decaying spike on longitudinal acceleration,
+        // which is what an impact physically is and what effect engines key
+        // on. VehicleSpeed is smoothed for audio, so the raw derivative alone
+        // blunts a wall strike into a gentle slowdown.
+        {
+            uint32_t seq = g_fmod.impactSeq.load();
+            if (seq != lastImpactSeq) {
+                lastImpactSeq = seq;
+                impactAt = GetTickCount64();
+                impactMag = g_fmod.impact.load() * (0.35f + g_fmod.impactVel.load()) * g_cfg.impactGain;
+            }
+            if (impactAt) {
+                ULONGLONG age = GetTickCount64() - impactAt;
+                if (age >= (ULONGLONG)g_cfg.impactDecayMs) { impactAt = 0; impactMag = 0.f; }
+                else accZ -= impactMag * (1.f - float(age) / float(g_cfg.impactDecayMs));
+            }
+        }
         float jerk = fabsf(cf - prevConst) / dt; prevConst = cf;
         float rumble = pf > 0.f ? pf : (jerk > 1.f ? 1.f : jerk);
         int gear = ue ? g_ue4.gear.load() + g_cfg.gearOffset : 0;

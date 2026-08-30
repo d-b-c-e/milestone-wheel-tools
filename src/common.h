@@ -54,6 +54,13 @@ struct Config {
     char     fmodLongSlip[32] = "LongitudinalSlip";
     char     fmodSusp[32]     = "SuspensionMovement";
     char     fmodBraking[32]  = "BrakingForce";
+    // Collision parameters. FMOD sets these only when a crash/scrape sound
+    // fires - a few hundred calls a race against ~175k for VehicleSpeed -
+    // so they are events, not continuous channels.
+    char     fmodImpact[32]   = "Intensity";
+    char     fmodImpactVel[32]= "Speed";
+    float    impactGain     = 25.0f;      // spike, in m/s^2 per unit intensity
+    int      impactDecayMs  = 150;
     // VehicleSpeed is 0..1 of the car's top speed; multiply to get m/s.
     // Calibrate against the in-game speedo: m/s = kmh / 3.6.
     float    fmodSpeedScale = 55.0f;
@@ -106,6 +113,9 @@ struct FmodState {
     std::atomic<float> longSlip{0};   // -0.5..1, negative = lockup
     std::atomic<float> susp{0};       // 0..1 suspension movement
     std::atomic<float> braking{0};    // 0..1
+    std::atomic<float> impact{0};     // 0..1, collision intensity (event)
+    std::atomic<float> impactVel{0};  // 0..1, collision speed (event)
+    std::atomic<uint32_t> impactSeq{0};   // bumped on each fresh impact event
     std::atomic<bool>  live{false};
     std::atomic<uint32_t> calls{0};
 };

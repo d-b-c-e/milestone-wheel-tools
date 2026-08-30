@@ -52,6 +52,16 @@ static int HookSetParam(void *self, const char *name, float value)
         else if (_stricmp(name, g_cfg.fmodLongSlip) == 0)  { g_fmod.longSlip = value; }
         else if (_stricmp(name, g_cfg.fmodSusp) == 0)      { g_fmod.susp = value; }
         else if (_stricmp(name, g_cfg.fmodBraking) == 0)   { g_fmod.braking = value; }
+        else if (_stricmp(name, g_cfg.fmodImpact) == 0) {
+            // Only a rising edge past the noise floor counts as a new hit;
+            // the parameter is also set to 0 to arm the next one.
+            float prev = g_fmod.impact.exchange(value);
+            if (value > 0.05f && value > prev) {
+                ++g_fmod.impactSeq;
+                logf("[impact] intensity %.3f (vel %.3f)", value, g_fmod.impactVel.load());
+            }
+        }
+        else if (_stricmp(name, g_cfg.fmodImpactVel) == 0) { g_fmod.impactVel = value; }
         if (g_cfg.fmodDiscover) {
             EnterCriticalSection(&g_lock);
             int i = 0;
