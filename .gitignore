@@ -1,2 +1,6 @@
 build/
 *.log
+
+# The prebuilt DLL ships so users need no MSYS2 toolchain.
+!dist/
+!dist/dinput8.dll
