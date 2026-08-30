@@ -5,6 +5,26 @@ the most widely parsed telemetry layout there is (SimHub, ShakeIt,
 SimRacingStudio, most dashboards and motion software). Three variants are
 selectable with `format=` in `milestone_mod.ini`.
 
+## ⚠️ The packet length is checked exactly
+
+The receiver validates by **total length**, and being one byte short fails
+silently — no error, no data, just nothing. Measured against SimHub's
+`ForzaReader` by sending each candidate size:
+
+| bytes | result |
+|-------|--------|
+| 232 (sled) | rejected by the Horizon reader |
+| 311 (fm7)  | rejected by the Horizon reader |
+| **323**    | **rejected** — the intuitive 232 + 12 + 79 |
+| **324**    | ✅ `"started receiving valid data"`, `"Game connected"` |
+| 331        | accepted but immediately `Paused=True` |
+
+Horizon is `232 sled + 12 pad + 79 dash + 1 trailing byte = 324`. Emitting 323
+made SimHub log `UDP Reader on port 8000 started receiving unprocessed data`
+at packet rate — 19,880 times in one race — and never connect. If a dash stays
+dead while the data looks right, check the length before anything else, and
+read the receiver's own log.
+
 ## Sled — 232 bytes, offset 0
 
 | off | type   | field                                  |
@@ -53,16 +73,25 @@ at 244.
 | field                    | source                                   | real? |
 |--------------------------|------------------------------------------|-------|
 | Accel/Brake/Clutch/HandBrake/Steer | the game's own `GetDeviceState` reads | yes |
-| CurrentEngineRpm, EngineMaxRpm | UE4 HUD properties (fallback: FMOD RPM param) | yes |
-| Speed, VelocityZ, Gear   | UE4 HUD properties                       | yes |
+| CurrentEngineRpm, EngineMaxRpm | UE4 HUD widget properties          | yes |
+| Gear                     | UE4 HUD widget property                  | yes |
+| Speed, VelocityZ         | FMOD `VehicleSpeed` × `speed_scale`      | yes (scale calibrated) |
+| TireSlipRatio ×4         | FMOD `LongitudinalSlip` — wheelspin / lockup | yes |
+| TireSlipAngle ×4         | FMOD `LateralSlip` — slide angle         | yes |
+| NormalizedSuspensionTravel ×4, SuspensionTravelMeters | FMOD `SuspensionMovement` | yes |
+| SurfaceRumble ×4         | FMOD `SuspensionMovement`                | yes |
+| Torque, Power            | FMOD `torque`, normalised → nominal Nm   | yes (shape real, units nominal) |
+| TireCombinedSlip ×4      | √(lat² + long²)                          | derived from real inputs |
 | AccelerationZ            | d(speed)/dt                              | derived |
-| AccelerationX            | −(constant force), scaled to ±1 g        | derived — steering torque as a lateral-load proxy |
-| SurfaceRumble ×4         | periodic FFB magnitude, else jerk of the constant force | derived |
-| WheelOnRumbleStrip ×4    | periodic force > 0.5                     | derived |
+| AccelerationX            | −(constant FFB force), scaled to ±1 g    | derived — steering torque as a lateral-load proxy |
+| WheelOnRumbleStrip ×4    | suspension movement > 0.7                | derived |
 | WheelRotationSpeed ×4    | speed / 0.33 m                           | derived |
 | IsRaceOn                 | 1 while a live HUD instance is being read (`race_on=always` forces 1) | — |
 | EngineIdleRpm            | 12 % of max                              | placeholder |
 | everything else          | 0                                        | — |
+
+The slip and suspension channels are the ones worth having for a bass shaker:
+they are the game's own physics, not anything inferred from force feedback.
 
 Derived fields exist so effect engines have something to key on; the log
 line every 5 s and `tools/forza_listen.py` show the raw channels so the

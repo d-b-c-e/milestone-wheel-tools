@@ -281,6 +281,26 @@ void discoverProps()
     logf("[ue4] discovery: %d matching properties listed", shown);
 }
 
+// Every property belonging to one class, whatever its name. Used on the class
+// that owns RPM so a speed/gear field that does not match the name hints is
+// still visible in the log.
+void dumpClass(BYTE *owner, const char *label)
+{
+    if (!owner) return;
+    std::vector<BYTE *> objs = snapshot();
+    int n = 0;
+    for (BYTE *o : objs) {
+        if (!o) continue;
+        BYTE *ou; if (!rd(o + O_OUTER, ou) || ou != owner) continue;
+        std::string cls = objName(objClass(o));
+        if (cls.size() < 8 || cls.compare(cls.size() - 8, 8, "Property") != 0) continue;
+        int32_t off = -1; if (g_pOffset) rd(o + g_pOffset, off);
+        logf("[ue4]   %-44s %-16s +0x%x", objName(o).c_str(), cls.c_str(), off);
+        ++n;
+    }
+    logf("[ue4] %s has %d properties", label, n);
+}
+
 Prop g_pRpm, g_pMax, g_pSpeed, g_pGear;
 BYTE *g_inst = nullptr; int g_instIdx = -1;
 ULONGLONG g_nextScan = 0, g_nextDiscover = 0;
@@ -342,7 +362,7 @@ bool ue4Poll()
         g_pSpeed = findProp(g_cfg.ue4Speed);
         g_pGear = findProp(g_cfg.ue4Gear);
         g_propsResolved = true;
-        if (g_cfg.ue4Discover) discoverProps();
+        if (g_cfg.ue4Discover) dumpClass(g_pRpm.owner, g_pRpm.ownerName.c_str());
     }
     // validate the cached instance: same pointer still sits at its index
     if (g_inst) {

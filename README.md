@@ -30,9 +30,12 @@ this fills both gaps from the outside.
 
 ## Status
 
-| game   | engine  | wheel fix | input tap | FFB tap | FMOD | UE4 values | notes |
-|--------|---------|-----------|-----------|---------|------|------------|-------|
-| Gravel | UE 4.17 | ✅ | ✅ | ✅ | ✅ hooked | 🔧 in progress | see [games/gravel](games/gravel) |
+| game   | engine  | wheel fix | input tap | FFB tap | FMOD physics | UE4 values | SimHub |
+|--------|---------|-----------|-----------|---------|--------------|------------|--------|
+| Gravel | UE 4.17 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ dash live |
+
+Verified on hardware 2026-08-30: working speedometer and tachometer in SimHub,
+with speed, RPM, gear, pedals, wheel slip and suspension travel all live.
 
 Legend: ✅ verified on hardware · 🔧 wired, being validated · ▫ not yet tried
 

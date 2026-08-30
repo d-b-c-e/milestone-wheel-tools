@@ -45,9 +45,18 @@ struct Config {
     float    ffbGain      = 1.0f;         // scale applied to normalised force
     // [fmod]
     bool     fmodDiscover = true;         // log every distinct parameter name
-    char     fmodRpm[32]  = "RPM";
-    char     fmodLoad[32] = "Load";
-    char     fmodSpeed[32]= "Speed";
+    // Gravel drives its engine audio from real physics, so these are the best
+    // telemetry source in the game. All are normalised unless noted.
+    char     fmodRpm[32]      = "RPM";
+    char     fmodLoad[32]     = "torque";
+    char     fmodSpeed[32]    = "VehicleSpeed";
+    char     fmodLatSlip[32]  = "LateralSlip";
+    char     fmodLongSlip[32] = "LongitudinalSlip";
+    char     fmodSusp[32]     = "SuspensionMovement";
+    char     fmodBraking[32]  = "BrakingForce";
+    // VehicleSpeed is 0..1 of the car's top speed; multiply to get m/s.
+    // Calibrate against the in-game speedo: m/s = kmh / 3.6.
+    float    fmodSpeedScale = 55.0f;
     // [ue4]
     bool     ue4Enabled   = true;
     bool     ue4Discover  = true;         // list matching property names once
@@ -91,8 +100,12 @@ struct FfbState {
 };
 struct FmodState {
     std::atomic<float> rpm{-1};       // -1 = never seen
-    std::atomic<float> load{-1};
-    std::atomic<float> speed{-1};
+    std::atomic<float> load{-1};      // engine torque 0..1
+    std::atomic<float> speed{-1};     // 0..1 of top speed
+    std::atomic<float> latSlip{0};    // 0..~0.6
+    std::atomic<float> longSlip{0};   // -0.5..1, negative = lockup
+    std::atomic<float> susp{0};       // 0..1 suspension movement
+    std::atomic<float> braking{0};    // 0..1
     std::atomic<bool>  live{false};
     std::atomic<uint32_t> calls{0};
 };

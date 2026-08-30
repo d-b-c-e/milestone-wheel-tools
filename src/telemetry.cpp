@@ -100,6 +100,11 @@ void loadConfig()
     iniStr(ini, "fmod", "rpm", g_cfg.fmodRpm, sizeof g_cfg.fmodRpm);
     iniStr(ini, "fmod", "load", g_cfg.fmodLoad, sizeof g_cfg.fmodLoad);
     iniStr(ini, "fmod", "speed", g_cfg.fmodSpeed, sizeof g_cfg.fmodSpeed);
+    iniStr(ini, "fmod", "lateral_slip", g_cfg.fmodLatSlip, sizeof g_cfg.fmodLatSlip);
+    iniStr(ini, "fmod", "longitudinal_slip", g_cfg.fmodLongSlip, sizeof g_cfg.fmodLongSlip);
+    iniStr(ini, "fmod", "suspension", g_cfg.fmodSusp, sizeof g_cfg.fmodSusp);
+    iniStr(ini, "fmod", "braking", g_cfg.fmodBraking, sizeof g_cfg.fmodBraking);
+    g_cfg.fmodSpeedScale = iniFloat(ini, "fmod", "speed_scale", 55.0f);
     g_cfg.ue4Enabled = iniInt(ini, "ue4", "enabled", 1) != 0;
     g_cfg.ue4Discover = iniInt(ini, "ue4", "discover", 1) != 0;
     iniStr(ini, "ue4", "rpm", g_cfg.ue4Rpm, sizeof g_cfg.ue4Rpm);
@@ -157,7 +162,11 @@ static DWORD WINAPI telemetryThread(LPVOID)
         if (due > elapsed) Sleep((DWORD)((due - elapsed) * 1000));
 
         bool ue = ue4Poll();
-        float speed = ue ? g_ue4.speed.load() * g_cfg.speedScale : 0.f;   // m/s
+        // Gravel exposes no speed on the HUD widget, so FMOD's normalised
+        // VehicleSpeed is the source; a UE4 property wins where one exists.
+        float speed = 0.f;
+        if (ue && g_ue4.speed.load() != 0.f) speed = g_ue4.speed.load() * g_cfg.speedScale;
+        else if (g_fmod.speed >= 0.f) speed = g_fmod.speed.load() * g_cfg.fmodSpeedScale;
         float rpm = ue ? g_ue4.rpm.load() : (g_fmod.rpm >= 0 ? g_fmod.rpm.load() : 0.f);
         float maxRpm = ue && g_ue4.maxRpm > 0 ? g_ue4.maxRpm.load() : 8000.f;
         float cf = g_ffb.constant.load(), pf = g_ffb.periodic.load();
@@ -171,41 +180,64 @@ static DWORD WINAPI telemetryThread(LPVOID)
         sl.timestampMs = GetTickCount();
         sl.engineMaxRpm = maxRpm; sl.engineIdleRpm = maxRpm * 0.12f; sl.currentEngineRpm = rpm;
         sl.accX = -cf * 9.81f; sl.accZ = accZ; sl.velZ = speed;
+        // Real physics channels, straight off the engine-audio parameters.
+        float lat = g_fmod.latSlip.load(), lon = g_fmod.longSlip.load();
+        float susp = g_fmod.susp.load(), torque = g_fmod.load >= 0 ? g_fmod.load.load() : 0.f;
+        float combined = sqrtf(lat * lat + lon * lon);
+        if (susp > 0.f) rumble = susp;          // suspension beats an FFB guess
         for (int i = 0; i < 4; ++i) {
             sl.wheelRotSpeed[i] = speed / 0.33f;
             sl.surfaceRumble[i] = rumble;
-            sl.onRumble[i] = pf > 0.5f ? 1 : 0;
-            sl.normSusp[i] = 0.5f;
+            sl.onRumble[i] = susp > 0.7f ? 1 : 0;
+            sl.normSusp[i] = susp;
+            sl.suspTravel[i] = susp * 0.15f;     // ~150 mm of travel
+            sl.slipRatio[i] = lon;
+            sl.slipAngle[i] = lat;
+            sl.combinedSlip[i] = combined;
         }
         sl.drivetrain = 2; sl.cylinders = 4;
         d.speed = speed; d.gear = (uint8_t)(gear < 0 ? 0 : gear > 10 ? 10 : gear);
+        d.torque = torque * 400.f;               // normalised -> Nm, nominal
+        d.power = torque * rpm * 0.05f;
         d.accel = u8(g_input.throttle); d.brake = u8(g_input.brake); d.clutch = u8(g_input.clutch);
         d.handbrake = u8(g_input.handbrake);
         float st = g_input.steer.load(); st = st < -1 ? -1 : st > 1 ? 1 : st;
         d.steer = (int8_t)(st * 127.f);
 
+        // Sizes are exact and checked by the receiver: sled 232, fm7 311,
+        // fh4/fh5 324. The Horizon packet is 232 + 12 pad + 79 dash + ONE
+        // trailing byte; emitting 323 makes SimHub log "unprocessed data" at
+        // packet rate and never connect.
         int n = 0;
         memcpy(pkt, &sl, sizeof sl); n += sizeof sl;
         if (dash) {
             if (fh4) { memset(pkt + n, 0, 12); n += 12; }
             memcpy(pkt + n, &d, sizeof d); n += sizeof d;
+            if (fh4) pkt[n++] = 0;
         }
+        static int loggedSize = 0;
+        if (loggedSize != n) { loggedSize = n; logf("[tx] packet size %d bytes (%s)", n, g_cfg.format); }
         int rc = sendto(s, (const char *)pkt, n, 0, (sockaddr *)&to, sizeof to);
         static int lastRc = -2, lastErr = 0;
         if (rc != lastRc) { lastRc = rc; lastErr = rc < 0 ? WSAGetLastError() : 0;
                             logf("[tx] sendto -> %d (err %d) socket %d mirror %d", rc, lastErr, (int)s, g_cfg.mirrorPort); }
-        if (g_cfg.mirrorPort) sendto(s, (const char *)pkt, n, 0, (sockaddr *)&mirror, sizeof mirror);
+        if (g_cfg.mirrorPort) {
+            int mrc = sendto(s, (const char *)pkt, n, 0, (sockaddr *)&mirror, sizeof mirror);
+            static int lastM = -2;
+            if (mrc != lastM) { lastM = mrc; logf("[tx] mirror sendto -> %d (err %d) port %d", mrc,
+                                                  mrc < 0 ? WSAGetLastError() : 0, g_cfg.mirrorPort); }
+        }
 
         ULONGLONG ms = GetTickCount64();
         if (ms >= nextStatus) {
             nextStatus = ms + 5000;
-            logf("[tx] input:%s(%u reads) ffb:%s(%u upd, %u eff) fmod:%s(%u calls) ue4:%s%s | steer %.2f thr %.2f brk %.2f hb %.2f (raw %d %d %d) | cf %.2f pf %.2f | rpm %.0f/%.0f spd %.1f gear %d",
+            logf("[tx] input:%s(%u reads) ffb:%s(%u upd, %u eff) fmod:%s(%u calls) ue4:%s%s | steer %.2f thr %.2f brk %.2f hb %.2f (raw %d %d %d) | cf %.2f pf %.2f | rpm %.0f/%.0f spd %.1f gear %d | slip %.2f/%.2f susp %.2f trq %.2f",
                  g_input.live ? "live" : "-", (unsigned)g_input.reads.load(), g_ffb.live ? "live" : "-",
                  (unsigned)g_ffb.updates.load(), (unsigned)g_ffb.effects.load(), g_fmod.live ? "live" : "-",
                  (unsigned)g_fmod.calls.load(), g_ue4.ready ? "ready" : "-", ue ? "+live" : "",
                  g_input.steer.load(), g_input.throttle.load(), g_input.brake.load(), g_input.handbrake.load(),
                  g_input.rawSteer.load(), g_input.rawThr.load(), g_input.rawBrk.load(),
-                 cf, pf, rpm, maxRpm, speed, gear);
+                 cf, pf, rpm, maxRpm, speed, gear, lat, lon, susp, torque);
         }
         if (ms >= nextDump) { nextDump = ms + 30000; fmodDumpDiscovery(); }
     }

@@ -21,6 +21,7 @@
 // `self` is one of the devices/effects we care about and otherwise forwards
 // untouched.
 #include "common.h"
+#include <cmath>
 
 static HMODULE g_real = nullptr;
 typedef HRESULT (WINAPI *PFN_Create)(HINSTANCE, DWORD, REFIID, LPVOID *, LPUNKNOWN);
@@ -250,7 +251,10 @@ static HRESULT STDMETHODCALLTYPE HookGetStateA(void *s, DWORD c, LPVOID d) { ret
 
 // ----------------------------------------------------------- effect hooks
 enum EffKind { EK_OTHER, EK_CONSTANT, EK_PERIODIC, EK_SPRING, EK_DAMPER, EK_RAMP };
-struct TrackedEff { void *eff = nullptr; EffKind kind = EK_OTHER; float gain = 1.f; };
+// The game runs two constant-force effects at once; a single shared value
+// would be whichever updated last, which is usually the smaller of the two.
+// Each effect keeps its own magnitude and the strongest wins.
+struct TrackedEff { void *eff = nullptr; EffKind kind = EK_OTHER; float gain = 1.f; float mag = 0.f; };
 static TrackedEff g_effs[64];
 typedef HRESULT (STDMETHODCALLTYPE *PFN_SetParams)(void *, LPCDIEFFECT, DWORD);
 static void *g_oSetParams = nullptr;
@@ -283,7 +287,11 @@ static void absorb(TrackedEff *t, LPCDIEFFECT e, DWORD flags)
             LONG m = ((const DICONSTANTFORCE *)e->lpvTypeSpecificParams)->lMagnitude;
             // direction: with a single axis, rglDirection[0] sign flips the force
             float dir = (e->cAxes >= 1 && e->rglDirection && e->rglDirection[0] < 0) ? -1.f : 1.f;
-            g_ffb.constant = float(m) / 10000.f * dir * g;
+            t->mag = float(m) / 10000.f * dir * g;
+            float best = 0.f;
+            for (const auto &o : g_effs)
+                if (o.eff && o.kind == EK_CONSTANT && fabsf(o.mag) > fabsf(best)) best = o.mag;
+            g_ffb.constant = best;
         }
         break;
     case EK_PERIODIC:

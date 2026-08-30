@@ -45,9 +45,13 @@ static int HookSetParam(void *self, const char *name, float value)
 {
     if (name) {
         ++g_fmod.calls;
-        if (_stricmp(name, g_cfg.fmodRpm) == 0)   { g_fmod.rpm = value;   g_fmod.live = true; }
-        else if (_stricmp(name, g_cfg.fmodLoad) == 0)  { g_fmod.load = value; }
-        else if (_stricmp(name, g_cfg.fmodSpeed) == 0) { g_fmod.speed = value; }
+        if (_stricmp(name, g_cfg.fmodRpm) == 0)            { g_fmod.rpm = value; g_fmod.live = true; }
+        else if (_stricmp(name, g_cfg.fmodSpeed) == 0)     { g_fmod.speed = value; g_fmod.live = true; }
+        else if (_stricmp(name, g_cfg.fmodLoad) == 0)      { g_fmod.load = value; }
+        else if (_stricmp(name, g_cfg.fmodLatSlip) == 0)   { g_fmod.latSlip = value; }
+        else if (_stricmp(name, g_cfg.fmodLongSlip) == 0)  { g_fmod.longSlip = value; }
+        else if (_stricmp(name, g_cfg.fmodSusp) == 0)      { g_fmod.susp = value; }
+        else if (_stricmp(name, g_cfg.fmodBraking) == 0)   { g_fmod.braking = value; }
         if (g_cfg.fmodDiscover) {
             EnterCriticalSection(&g_lock);
             int i = 0;
