@@ -60,9 +60,23 @@ and similar tools use the same name; do not install over them.
 
 ## Receiving the data
 
-SimHub → *Games* → **Forza Motorsport 7** (for `format=fm7`) or **Forza
-Horizon 4** (`fh4`), UDP port `5300`. SimHub binds the port exclusively;
-set `mirror_port=` to feed a second listener such as `tools/forza_listen.py`.
+In SimHub pick a Forza game and note the UDP port it shows, then match both
+in `milestone_mod.ini`:
+
+| SimHub game | `format=` | bytes |
+|---|---|---|
+| Forza Horizon 4 / **Horizon 5** | `fh4` | 324 |
+| Forza Motorsport 7 | `fm7` | 311 |
+
+The length must match the game you picked — see the warning in
+[docs/forza-format.md](docs/forza-format.md); a mismatch fails silently and
+SimHub simply never connects. Its log
+(`SimHub\Logs\SimHub.txt`) says which happened: `started receiving valid
+data` and `Game connected`, or `started receiving unprocessed data` at packet
+rate.
+
+SimHub binds the port exclusively, so set `mirror_port=` to feed
+`tools/forza_listen.py` at the same time.
 
 ## Build
 
