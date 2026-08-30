@@ -61,7 +61,13 @@ struct TrackedDev {
     DWORD dataSize = 0;
     bool  rangesKnown = false;
     LONG  lo[8] = {0}, hi[8] = {0};
+    bool  everLive = false;   // has this object ever returned a non-blank state?
 };
+// The game creates several device objects for the same wheel; some are
+// only ever enumerated or held unacquired and read back all zeros, which
+// would overwrite the real reads at poll rate. Once any object has produced
+// a non-blank state, only objects that have done so may update the state.
+static void *g_liveDev = nullptr;
 static TrackedDev g_devs[16];
 static CRITICAL_SECTION g_devLock;
 
@@ -209,6 +215,14 @@ static HRESULT STDMETHODCALLTYPE HookGetState(void *self, DWORD cb, LPVOID data,
         return hr;                                   // not ours, or a custom format
     if (!t->rangesKnown) learnRanges(t);
     const LONG *ax = (const LONG *)data;             // lX lY lZ lRx lRy lRz slider[2]
+    {
+        bool blank = true;
+        for (int i = 0; i < 8 && blank; ++i) if (ax[i] != 0) blank = false;
+        const BYTE *b = (const BYTE *)data + 48;
+        for (int i = 0; i < 32 && blank; ++i) if (b[i] & 0x80) blank = false;
+        if (!blank && !t->everLive) { t->everLive = true; g_liveDev = self; logf("[input] device %p is delivering real state", self); }
+        if (g_liveDev && !t->everLive) return hr;      // a blank twin; ignore
+    }
     auto get = [&](const char *name, bool bipolar) -> float {
         int i = axisIndex(name);
         if (i < 0) return 0.f;

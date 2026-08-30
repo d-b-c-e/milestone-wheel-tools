@@ -14,6 +14,8 @@ import time
 
 port = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 5300
 raw = "--raw" in sys.argv
+# a \r-refreshed line is right for a terminal; a file wants real lines
+EOL = "\r" if sys.stdout.isatty() else "\n"
 
 SLED = "<iIfff fff fff fff fff 4f4f4f 4i 4f4f4f4f4f iiiii"
 DASH = "<fff fff 4f fff ffff H B BBBBB b bb"
