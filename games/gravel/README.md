@@ -52,6 +52,68 @@ Run the in-game wheel calibration once afterwards.
 
 `python tools/dump_bindings.py "%LOCALAPPDATA%\Gravel\Saved\SaveGames\settings.sav" --wheel`
 
+## Measured reference
+
+All verified on hardware 2026-08-30 (MOZA R12). Recorded so nothing here has
+to be rediscovered.
+
+### UE4 reflection
+
+| item | value |
+|---|---|
+| `UProperty::Offset_Internal` | **`+0x50`** (probed; no published table lists this for 4.17) |
+| HUD class | `IgnitionGaugeLogicWidget` |
+| `VehicleCurrentRPM` | `+0x300` FloatProperty |
+| `VehicleMaxRPM` | `+0x2fc` FloatProperty |
+| `VehicleCurrentGear` | `+0x30c` IntProperty |
+| speed property | **none exists** — speed comes from FMOD |
+| object count | ~123k front end, ~141k in a race |
+| discovery time | ~10 ms |
+
+### FMOD parameters
+
+Gravel sets **no RPM parameter**; it drives engine audio from real physics, so
+these are the telemetry. Call count reveals the nature: high is a continuous
+channel, low is an event.
+
+| parameter | calls/race | range | used as |
+|---|---|---|---|
+| `VehicleSpeed` | ~175,000 | 0–0.70 | speed (× `speed_scale`) |
+| `Wet` | ~161,000 | 0–0 | — (dry track) |
+| `LateralSlip` | ~65,000 | 0–0.67 | TireSlipAngle |
+| `LongitudinalSlip` | ~65,000 | −1–1 | TireSlipRatio |
+| `torque` | ~13,500 | 0–1 | Torque / Power |
+| `DamageState` | ~13,500 | 0–0 | — (never left 0) |
+| `SuspensionMovement` | ~13,000 | 0–1 | suspension + surface rumble |
+| `BrakingForce` | ~900 | 0–1 | — |
+| `Intensity` | ~550 | 0–1 | **collision event** |
+| `Speed` | ~450 | 0–0.49 | **collision velocity** |
+| `GearUpDown` | ~120 | −1–1 | — |
+
+Car-specific extras appear on some vehicles (`TurbineRpm`,
+`AntiLagIntervention`, `Throttle`, `RVB_Tunnel`), so the set is not fixed.
+
+### Collisions
+
+Over **368 logged impacts**: `Intensity` is effectively binary — median 1.000,
+mean 0.878 — so it reports *that* you hit something, not how hard. The
+collision `Speed` (median 0.23, max 0.46) is the real discriminator, and
+magnitude is weighted towards it. A wall scrape fires ~15 events in 200 ms,
+each re-triggering the spike, which gives sustained rumble rather than one
+thump.
+
+### Wheel and input
+
+| item | value |
+|---|---|
+| MOZA R12 | `dwDevType 0x18` (SIXDOF), 8 axes, 128 buttons |
+| product key | `0006346e` = (PID `0006` << 16) \| VID `346E` |
+| data format | **DIJOYSTATE2** (272 B) — all 128 buttons reachable |
+| axis ranges | DirectInput default 0..65535 |
+| pedals | idle **low**, so `&1.0&0.0` |
+| steer / throttle / brake / handbrake | `Axis1` / `Axis3` / `Axis6` / `Axis7` |
+| FFB effects | 2 constant + 1 spring, created at startup |
+
 ## Caveats
 
 - No telemetry of any kind ships with the game; everything here is from
