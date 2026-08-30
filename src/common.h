@@ -59,7 +59,11 @@ struct Config {
     // so they are events, not continuous channels.
     char     fmodImpact[32]   = "Intensity";
     char     fmodImpactVel[32]= "Speed";
-    float    impactGain     = 25.0f;      // spike, in m/s^2 per unit intensity
+    // Measured over 368 collisions in Gravel: Intensity is effectively binary
+    // (median 1.0, mean 0.88) so it says THAT you hit something, not how hard;
+    // the collision Speed parameter (0..0.46, median 0.23) is what actually
+    // discriminates a scrape from a crash. So velocity carries the magnitude.
+    float    impactGain     = 80.0f;      // peak m/s^2 at full collision speed
     int      impactDecayMs  = 150;
     // VehicleSpeed is 0..1 of the car's top speed; multiply to get m/s.
     // Calibrate against the in-game speedo: m/s = kmh / 3.6.

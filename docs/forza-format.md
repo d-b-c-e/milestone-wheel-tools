@@ -82,7 +82,7 @@ at 244.
 | SurfaceRumble ×4         | FMOD `SuspensionMovement`                | yes |
 | Torque, Power            | FMOD `torque`, normalised → nominal Nm   | yes (shape real, units nominal) |
 | TireCombinedSlip ×4      | √(lat² + long²)                          | derived from real inputs |
-| AccelerationZ            | d(speed)/dt                              | derived |
+| AccelerationZ            | d(speed)/dt, **plus a decaying spike per collision** | derived from real events |
 | AccelerationX            | −(constant FFB force), scaled to ±1 g    | derived — steering torque as a lateral-load proxy |
 | WheelOnRumbleStrip ×4    | suspension movement > 0.7                | derived |
 | WheelRotationSpeed ×4    | speed / 0.33 m                           | derived |

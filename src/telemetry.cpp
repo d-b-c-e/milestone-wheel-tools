@@ -185,7 +185,11 @@ static DWORD WINAPI telemetryThread(LPVOID)
             if (seq != lastImpactSeq) {
                 lastImpactSeq = seq;
                 impactAt = GetTickCount64();
-                impactMag = g_fmod.impact.load() * (0.35f + g_fmod.impactVel.load()) * g_cfg.impactGain;
+                // Weighted towards collision speed: Intensity saturates at 1.0
+                // for almost every hit, so weighting it flattened a kerb strike
+                // and a head-on into the same nudge.
+                float vel = g_fmod.impactVel.load();
+                impactMag = g_fmod.impact.load() * (0.15f + vel * 1.8f) * g_cfg.impactGain;
             }
             if (impactAt) {
                 ULONGLONG age = GetTickCount64() - impactAt;
