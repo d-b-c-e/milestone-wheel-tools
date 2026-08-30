@@ -4,3 +4,5 @@ build/
 # The prebuilt DLL ships so users need no MSYS2 toolchain.
 !dist/
 !dist/dinput8.dll
+!dist/wheelprobe.exe
+tools/wheelprobe/*.exe

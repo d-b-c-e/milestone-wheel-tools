@@ -101,6 +101,39 @@ different one rather than break it.
 
 ⚠️ Never use this in a game with kernel anti-cheat.
 
+## Mapping your controls
+
+Milestone's rebind screen is unusable with many direct-drive wheels — an axis
+resting at an extreme reads as permanently deflected, so the "press a control"
+listener latches onto it and never sees the button you press. Do it from
+outside the game instead:
+
+```powershell
+.\WheelSetup.ps1
+```
+
+It finds the game, reads the game's own action list out of its save file,
+detects your wheel, and then:
+
+- **Calibrate pedals** — work each pedal through its travel and it identifies
+  which axis moved and which way, deriving the polarity. Copying another
+  wheel's block is what leaves a game convinced a pedal is held down.
+- **Bind a control** — pick *"Rewind"* or *"Change camera"*, press the button
+  you want, done.
+
+That second one hides an indirection you would otherwise have to work out
+yourself. These games bind in two layers — physical button → logical slot
+(`WheelConfig.ini`), then logical slot → game action (`settings.sav`) — so
+putting rewind on a button really means finding which `Wheel_*` slot
+`RewindActivate` listens to and pointing *that* at your button. The defaults
+hold surprises: in Gravel `GearUp` listens to `Wheel_RightShoulder`, and
+nothing at all reads `Wheel_GearUp`.
+
+Reading all 128 buttons needs `c_dfDIJoystick2`, which is why
+`tools/wheelprobe` is a small native helper rather than pure PowerShell.
+
+Run the game's wheel calibration once afterwards.
+
 ## Setting up SimHub
 
 Pick a Forza game in SimHub, note the UDP port it shows, and match both in
