@@ -143,7 +143,11 @@ function Set-IniValueCrlf {
         [Parameter(Mandatory)] [string]$Path,
         [Parameter(Mandatory)] [string]$Section,
         [Parameter(Mandatory)] [string]$Key,
-        [Parameter(Mandatory)] [string]$Value
+        # An empty value is legitimate and often meaningful: OutRun 2006 treats
+        # an empty DeviceGuid as "this input slot is off". Without
+        # AllowEmptyString the cmdlet refuses to write the very value that
+        # disables a feature.
+        [Parameter(Mandatory)] [AllowEmptyString()] [string]$Value
     )
     $raw = Get-Content $Path -Raw
     $nl = if ($raw -match "`r`n") { "`r`n" } else { "`n" }
