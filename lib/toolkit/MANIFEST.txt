@@ -2,7 +2,7 @@
 # placed here. The next sync compares against this to tell a routine
 # update apart from something edited locally, and refuses to overwrite
 # the second kind. Do not edit by hand.
-# toolkit v0.7.1  2026-09-04T16:09:55
+# toolkit v0.7.2  2026-09-04T16:21:05
 07A030FC3C44A3DE0EA50C5D542E738116CF6D348356A39D4F7532288467DBE7  include\dinput_proxy.h
 43EA15ACD34478D9DD8FF567EF14DA87531C60FFAC7057F72BF43CEEF281247B  include\force_model.h
 4DD03EA92405C9BB157755B1B506036E469AFAC335253A2A40E0D4B32FA13999  include\force_profile.h
