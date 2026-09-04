@@ -157,9 +157,24 @@ function Set-IniValueCrlf {
         $raw = $raw.TrimEnd("`r", "`n") + $nl + $nl + "[$Section]" + $nl + "$Key=$Value" + $nl
     } else {
         $block = $m.Groups[1].Value
-        $keyRx = "(?m)^" + [regex]::Escape($Key) + "=[^\r\n]*"
-        if ([regex]::IsMatch($block, $keyRx)) { $block = [regex]::Replace($block, $keyRx, "$Key=$Value", 1) }
-        else { $block = $block.TrimEnd("`r", "`n") + $nl + "$Key=$Value" }
+        # "key = value" is as common as "key=value" - OutRun 2006 writes the
+        # first, Milestone the second. Matching only the tight form appends a
+        # SECOND line instead of replacing, leaving a duplicate key whose
+        # winner depends on the parser. Capture the indent and the separator
+        # so the file's own spacing survives the edit.
+        $keyRx = "(?m)^([ \t]*)" + [regex]::Escape($Key) + "([ \t]*=[ \t]*)[^\r\n]*"
+        $existing = [regex]::Match($block, $keyRx)
+        if ($existing.Success) {
+            $block = $block.Remove($existing.Index, $existing.Length).Insert(
+                $existing.Index, $existing.Groups[1].Value + $Key + $existing.Groups[2].Value + $Value)
+        } else {
+            # A new key copies the spacing of whatever key the section already
+            # has, so an appended line does not look foreign.
+            $sep = "="
+            $sib = [regex]::Match($block, "(?m)^[ \t]*[^\[\r\n;][^\r\n=]*?([ \t]*=[ \t]*)")
+            if ($sib.Success) { $sep = $sib.Groups[1].Value }
+            $block = $block.TrimEnd("`r", "`n") + $nl + "$Key$sep$Value"
+        }
         $raw = $raw.Substring(0, $m.Index) + $block + $raw.Substring($m.Index + $m.Length)
     }
     # A key appended to the file's last section would otherwise drop the
