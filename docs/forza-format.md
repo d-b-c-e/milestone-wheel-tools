@@ -19,7 +19,11 @@ silently — no error, no data, just nothing. Measured against SimHub's
 | **324**    | ✅ `"started receiving valid data"`, `"Game connected"` |
 | 331        | accepted but immediately `Paused=True` |
 
-Horizon is `232 sled + 12 pad + 79 dash + 1 trailing byte = 324`. Emitting 323
+Horizon is `232 sled + 12 pad + 79 dash + 1 trailing byte = 324`. Since the
+toolkit encoder took over (`lib/toolkit/include/forza_packet.h`) that trailing
+byte carries `'R'` (0x52) rather than zero: no Forza title reads it, and a
+sentinel lets `forza_probe.py` say whose packets it is looking at when several
+senders share a port. Emitting 323
 made SimHub log `UDP Reader on port 8000 started receiving unprocessed data`
 at packet rate — 19,880 times in one race — and never connect. If a dash stays
 dead while the data looks right, check the length before anything else, and

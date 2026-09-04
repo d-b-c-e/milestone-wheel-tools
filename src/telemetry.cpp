@@ -120,27 +120,13 @@ void loadConfig()
 }
 
 // ------------------------------------------------------------ forza packet
-#pragma pack(push, 1)
-struct Sled {
-    int32_t  isRaceOn; uint32_t timestampMs;
-    float engineMaxRpm, engineIdleRpm, currentEngineRpm;
-    float accX, accY, accZ, velX, velY, velZ, angX, angY, angZ, yaw, pitch, roll;
-    float normSusp[4], slipRatio[4], wheelRotSpeed[4];
-    int32_t onRumble[4];
-    float puddle[4], surfaceRumble[4], slipAngle[4], combinedSlip[4], suspTravel[4];
-    int32_t carOrdinal, carClass, carPI, drivetrain, cylinders;
-};
-struct Dash {
-    float posX, posY, posZ, speed, power, torque;
-    float tireTemp[4];
-    float boost, fuel, distance, bestLap, lastLap, currentLap, currentRaceTime;
-    uint16_t lapNumber; uint8_t racePosition;
-    uint8_t accel, brake, clutch, handbrake, gear; int8_t steer;
-    int8_t drivingLine, aiBrakeDiff;
-};
-#pragma pack(pop)
-static_assert(sizeof(Sled) == 232, "sled must be 232 bytes");
-static_assert(sizeof(Dash) == 79, "dash must be 79 bytes");
+// The layout and the encoder come from dbce-wheel-mod-toolkit
+// (lib/toolkit/include/forza_packet.h). The Sled and Dash structs that used
+// to live here moved there unchanged - every field keeps its name - so the
+// 232 / 311 / 324 rule is now enforced once, by a header with its own test.
+#include "forza_packet.h"
+using dbce::forza::Sled;
+using dbce::forza::Dash;
 
 static uint8_t u8(float f) { f = f < 0 ? 0 : f > 1 ? 1 : f; return (uint8_t)(f * 255.f + 0.5f); }
 
@@ -243,13 +229,9 @@ static DWORD WINAPI telemetryThread(LPVOID)
         // fh4/fh5 324. The Horizon packet is 232 + 12 pad + 79 dash + ONE
         // trailing byte; emitting 323 makes SimHub log "unprocessed data" at
         // packet rate and never connect.
-        int n = 0;
-        memcpy(pkt, &sl, sizeof sl); n += sizeof sl;
-        if (dash) {
-            if (fh4) { memset(pkt + n, 0, 12); n += 12; }
-            memcpy(pkt + n, &d, sizeof d); n += sizeof d;
-            if (fh4) pkt[n++] = 0;
-        }
+        const dbce::forza::Layout layout = !dash ? dbce::forza::FORZA_SLED_232
+                                          : fh4 ? dbce::forza::FORZA_HORIZON_324 : dbce::forza::FORZA_FM7_DASH_311;
+        int n = dbce::forza::build(layout, sl, d, pkt, sizeof pkt, 'R');   // 'R': this mod's frames, for forza_probe
         static int loggedSize = 0;
         if (loggedSize != n) { loggedSize = n; logf("[tx] packet size %d bytes (%s)", n, g_cfg.format); }
         int rc = sendto(s, (const char *)pkt, n, 0, (sockaddr *)&to, sizeof to);

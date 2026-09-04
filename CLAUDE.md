@@ -40,6 +40,13 @@ plain atomics; the sender thread reads them.
 ./build.sh                    # -> build/dinput8.dll (x64, MSYS2 MinGW-w64 GCC 16)
 ```
 
+`lib/toolkit/` is vendored from `E:\Source\dbce-wheel-mod-toolkit` (the shared
+racing-mod core): `include/forza_packet.h` is the Forza encoder `telemetry.cpp`
+compiles against, `powershell/DbceWheel.psm1` is what the three scripts import
+for Steam discovery and DirectInput enumeration. Fix packet or enumeration bugs
+**there**, release, then `tools\Sync-Toolkit.ps1 -Version vX.Y.Z -Parts
+include,powershell` here. Do not edit the vendored files in place.
+
 `build.sh` hardcodes `/e/msys64` — that is the development machine, adjust it.
 A 32-bit game needs a 32-bit build.
 

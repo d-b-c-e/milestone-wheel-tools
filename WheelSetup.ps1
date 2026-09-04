@@ -51,25 +51,11 @@ if (-not (Test-Path $probe)) {
 }
 
 # ---------------------------------------------------------------- the game
-function Get-SteamLibraries {
-    $bases = @()
-    foreach ($k in @('HKCU:\Software\Valve\Steam', 'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam')) {
-        $v = Get-ItemProperty $k -EA SilentlyContinue
-        foreach ($n in 'SteamPath', 'InstallPath') { if ($v -and $v.$n) { $bases += ($v.$n -replace '/', '\') } }
-    }
-    $bases += "${env:ProgramFiles(x86)}\Steam"
-    $libs = @()
-    foreach ($b in ($bases | Sort-Object -Unique)) {
-        $vdf = Join-Path $b 'steamapps\libraryfolders.vdf'
-        if (Test-Path $vdf) {
-            $libs += $b
-            foreach ($m in [regex]::Matches((Get-Content $vdf -Raw), '"path"\s+"([^"]+)"')) {
-                $libs += $m.Groups[1].Value -replace '\\\\', '\'
-            }
-        }
-    }
-    $libs | Sort-Object -Unique
-}
+# Steam discovery and DirectInput enumeration come from dbce-wheel-mod-toolkit's
+# PowerShell module, vendored under lib\toolkit (tools\Sync-Toolkit.ps1).
+$toolkit = Join-Path $root 'lib\toolkit\powershell\DbceWheel.psm1'
+if (-not (Test-Path $toolkit)) { Die "lib\toolkit is missing - run tools\Sync-Toolkit.ps1, or re-download the release" }
+Import-Module $toolkit -Force
 
 Say "Milestone wheel setup" 'White'
 Head "Finding the game"

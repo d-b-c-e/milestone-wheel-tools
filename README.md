@@ -184,7 +184,11 @@ Only needed if you would rather not use the release binary. MSYS2 MinGW-w64
 ./build.sh          # -> build/dinput8.dll (x64)
 ```
 
-A 32-bit game needs a 32-bit build.
+A 32-bit game needs a 32-bit build. The Forza encoder and the installer's
+Steam/DirectInput helpers are vendored from
+[dbce-wheel-mod-toolkit](https://github.com/d-b-c-e/dbce-wheel-mod-toolkit)
+under `lib/toolkit` (pinned in `lib/toolkit/VERSION`); bump with
+`tools\Sync-Toolkit.ps1 -Version vX.Y.Z -Parts include,powershell`.
 
 ## Tools
 
@@ -192,6 +196,7 @@ A 32-bit game needs a 32-bit build.
 |---|---|
 | `WheelSetup.ps1` | map controls and calibrate pedals without the in-game menu |
 | `Install.ps1` / `Uninstall.ps1` | install or remove the mod, detecting game and wheel |
+| `tools/Sync-Toolkit.ps1` | re-vendor the toolkit pieces under `lib/toolkit` |
 | `tools/wheelprobe/` | native helper that reads all 128 buttons and 8 axes live |
 | `tools/forza_listen.py` | decode and print the packets — validate without SimHub |
 | `tools/Measure-WheelAxes.ps1` | walks you through each pedal, works out which axis moves and which way, prints the config lines |

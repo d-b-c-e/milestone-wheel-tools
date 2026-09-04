@@ -79,34 +79,13 @@ if (-not (Test-Path $dll)) {
 }
 Ok "using $((Resolve-Path $dll).Path)"
 
-# ------------------------------------------------------------ find the game
-function Get-SteamLibraries {
-    # Steam is frequently NOT under Program Files - the registry is the only
-    # reliable source for where it actually lives.
-    $bases = @()
-    foreach ($k in @('HKCU:\Software\Valve\Steam',
-                     'HKLM:\SOFTWARE\WOW6432Node\Valve\Steam',
-                     'HKLM:\SOFTWARE\Valve\Steam')) {
-        $v = Get-ItemProperty $k -EA SilentlyContinue
-        foreach ($name in 'SteamPath', 'InstallPath') {
-            if ($v -and $v.$name) { $bases += ($v.$name -replace '/', '\') }
-        }
-    }
-    $bases += "${env:ProgramFiles(x86)}\Steam"
-    $bases += "$env:ProgramFiles\Steam"
+# Steam discovery and DirectInput enumeration come from dbce-wheel-mod-toolkit's
+# PowerShell module, vendored under lib\toolkit (tools\Sync-Toolkit.ps1).
+$toolkit = Join-Path $root 'lib\toolkit\powershell\DbceWheel.psm1'
+if (-not (Test-Path $toolkit)) { Die "lib\toolkit is missing - run tools\Sync-Toolkit.ps1, or re-download the release" }
+Import-Module $toolkit -Force
 
-    $libs = @()
-    foreach ($base in ($bases | Sort-Object -Unique)) {
-        $vdf = Join-Path $base 'steamapps\libraryfolders.vdf'
-        if (Test-Path $vdf) {
-            $libs += $base
-            foreach ($m in [regex]::Matches((Get-Content $vdf -Raw), '"path"\s+"([^"]+)"')) {
-                $libs += $m.Groups[1].Value -replace '\\\\', '\'
-            }
-        }
-    }
-    $libs | Sort-Object -Unique
-}
+# ------------------------------------------------------------ find the game
 
 
 Step "Looking for supported games"
@@ -145,48 +124,12 @@ Ok "$($target.Name)  ->  $($target.Path)"
 # --------------------------------------------------------- detect the wheel
 # DirectInput builds guidProduct.Data1 as (PID << 16) | VID, which is exactly
 # the key both this mod and Milestone's WheelConfig.ini use.
+# Get-DirectInputDevices (toolkit) carries the two COM marshalling workarounds
+# that used to be inlined here; this keeps the property names the rest of the
+# script reads.
 function Get-Wheels {
-    $src = @'
-using System; using System.Runtime.InteropServices; using System.Collections.Generic;
-[StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-public struct DIDEVICEINSTANCEW {
-  public int dwSize; public Guid guidInstance; public Guid guidProduct; public int dwDevType;
-  [MarshalAs(UnmanagedType.ByValTStr, SizeConst=260)] public string tszInstanceName;
-  [MarshalAs(UnmanagedType.ByValTStr, SizeConst=260)] public string tszProductName;
-  public Guid guidFFDriver; public ushort wUsagePage; public ushort wUsage;
-}
-[ComImport, Guid("BF798031-483A-4DA2-AA99-5D64ED369700"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-public interface IDirectInput8W {
-  int CreateDevice(ref Guid g, out IntPtr d, IntPtr u);
-  int EnumDevices(int t, IntPtr cb, IntPtr r, int f);
-  int GetDeviceStatus(ref Guid g); int RunControlPanel(IntPtr h, int f); int Initialize(IntPtr h, int v);
-}
-public static class DIScan {
-  public delegate int Cb(ref DIDEVICEINSTANCEW i, IntPtr p);
-  [DllImport("dinput8.dll")] static extern int DirectInput8Create(IntPtr h,int v,ref Guid r,out IDirectInput8W p,IntPtr u);
-  [DllImport("kernel32.dll")] static extern IntPtr GetModuleHandleW(IntPtr n);
-  static Cb _keep; public static List<string> Items = new List<string>();
-  static int OnDevice(ref DIDEVICEINSTANCEW i, IntPtr p) {
-    uint key = BitConverter.ToUInt32(i.guidProduct.ToByteArray(), 0);
-    int t = i.dwDevType & 0xFF;
-    bool ffb = (i.dwDevType & 0x10000) != 0;
-    Items.Add(string.Format("{0:x8}|{1}|{2}|{3}", key, i.tszProductName, t, ffb));
-    return 1;
-  }
-  public static void Run() {
-    Items.Clear();
-    var iid = new Guid("BF798031-483A-4DA2-AA99-5D64ED369700"); IDirectInput8W di;
-    if (DirectInput8Create(GetModuleHandleW(IntPtr.Zero), 0x0800, ref iid, out di, IntPtr.Zero) != 0) return;
-    _keep = new Cb(OnDevice);
-    di.EnumDevices(4, Marshal.GetFunctionPointerForDelegate(_keep), IntPtr.Zero, 1);  // GAMECTRL, attached
-  }
-}
-'@
-    Add-Type -TypeDefinition $src -EA SilentlyContinue
-    [DIScan]::Run()
-    [DIScan]::Items | ForEach-Object {
-        $f = $_ -split '\|'
-        [pscustomobject]@{ Key = $f[0]; Name = $f[1]; Type = [int]$f[2]; FFB = [bool]::Parse($f[3]) }
+    Get-DirectInputDevices | ForEach-Object {
+        [pscustomobject]@{ Key = $_.Key; Name = $_.Name; Type = $_.Type; FFB = $_.ForceFeedback }
     }
 }
 
