@@ -16,6 +16,8 @@ function Assert-Throws([scriptblock]$Action, [string]$Message) {
 }
 $oldLocal = $env:LOCALAPPDATA
 $oldFixture = $env:MILESTONE_UX_FIXTURE
+$oldPreviewMode = $env:MILESTONE_UX_PREVIEW
+$oldProbePid = $env:MILESTONE_UX_PROBE_PID
 try {
     $preference = Join-Path $fixture 'settings-view.json'
     Assert ((Get-SettingsView $preference) -eq 'Simple') 'New users must start in Simple.'
@@ -67,6 +69,23 @@ try {
     Assert-Throws { Find-AxisMapping @('AX 0 0 0 0 0 0 0 0') @('AX 65535 65535 0 0 0 0 0 0') } 'Ambiguous movement must not bind arbitrarily.'
     Assert-Throws { Find-AxisMapping @('AX -1 0 0 0 0 0 0 0') @('AX 0 0 65535 0 0 0 0 0') } 'Malformed device input must fail visibly.'
 
+    $neutralPreview = Get-DeviceInputPreview 'Axis1&1.0&0.0' @(32767,0,0,0,0,0,0,0) -Steering
+    Assert ($neutralPreview.Label -eq 'Centre') 'Steering neutral should be readable as Centre.'
+    Assert ((Get-DeviceInputPreview 'Axis1&1.0&0.0' @(0,0,0,0,0,0,0,0) -Steering).Label -eq 'Left 100%') 'Steering left preview is incorrect.'
+    Assert ((Get-DeviceInputPreview 'Axis1&1.0&0.0' @(65535,0,0,0,0,0,0,0) -Steering).Label -eq 'Right 100%') 'Steering right preview is incorrect.'
+    Assert ((Get-DeviceInputPreview 'Axis1&-1.0&1.0' @(0,0,0,0,0,0,0,0) -Steering).Label -eq 'Right 100%') 'Steering inversion was not applied to preview.'
+    Assert ((Get-DeviceInputPreview 'Axis3&1.0&0.0' @(0,0,0,0,0,0,0,0)).Label -eq 'Released (0%)') 'Pedal released preview is incorrect.'
+    Assert ((Get-DeviceInputPreview 'Axis3&1.0&0.0' @(0,0,65535,0,0,0,0,0)).Label -eq 'Full (100%)') 'Pedal full preview is incorrect.'
+    Assert ((Get-DeviceInputPreview 'Axis3&-1.0&1.0' @(0,0,65535,0,0,0,0,0)).Label -eq 'Released (0%)') 'Inverted pedal rest preview is incorrect.'
+    Assert ((Get-DeviceInputPreview 'Axis3&-1.0&1.0' @(0,0,0,0,0,0,0,0)).Label -eq 'Full (100%)') 'Inverted pedal full preview is incorrect.'
+    $clamped = Get-DeviceInputPreview 'Axis3&1.0&0.0' @(0,0,90000,0,0,0,0,0)
+    Assert ($clamped.Value -eq 1.0 -and $clamped.Clamped) 'Out-of-range high input must be clamped and labeled.'
+    $clamped = Get-DeviceInputPreview 'Axis3&1.0&0.0' @(0,0,-5000,0,0,0,0,0)
+    Assert ($clamped.Value -eq 0.0 -and $clamped.Clamped) 'Out-of-range low input must be clamped and labeled.'
+    Assert (-not (Get-DeviceInputPreview 'Axis3&0.5&0.2' @(0,0,10000,0,0,0,0,0)).Available) 'Custom transforms must not be guessed.'
+    Assert (-not (Get-DeviceInputPreview 'Button9' @(0,0,10000,0,0,0,0,0)).Available) 'A button mapping must not pretend to be an axis.'
+    Assert ((Get-DeviceInputPreview '' @(0,0,0,0,0,0,0,0)).Label -eq 'Not bound') 'Unbound preview must be explicit.'
+
     $wc = Join-Path $fixture 'Gravel\gravel\Config\WindowsNoEditor\WheelConfig.ini'
     [IO.Directory]::CreateDirectory((Split-Path $wc -Parent)) | Out-Null
     [IO.File]::WriteAllText($wc, $text)
@@ -93,6 +112,11 @@ class FixtureProbe {
         string file = Environment.GetEnvironmentVariable("MILESTONE_UX_FIXTURE");
         int count = File.Exists(file) ? Int32.Parse(File.ReadAllText(file)) : 0;
         File.WriteAllText(file, (count + 1).ToString());
+        string pidFile = Environment.GetEnvironmentVariable("MILESTONE_UX_PROBE_PID");
+        if (!String.IsNullOrEmpty(pidFile)) File.WriteAllText(pidFile, System.Diagnostics.Process.GetCurrentProcess().Id.ToString());
+        string mode = Environment.GetEnvironmentVariable("MILESTONE_UX_PREVIEW");
+        if (mode == "hang") { System.Threading.Thread.Sleep(10000); return; }
+        if (mode == "disconnect") { Console.WriteLine("ERR fixture device disconnected"); Environment.Exit(2); }
         Console.WriteLine(count % 2 == 0 ? "AX 0 0 65535 0 0 0 0 0" : "AX 0 0 0 0 0 0 0 0");
     }
 }
@@ -101,6 +125,8 @@ class FixtureProbe {
     & $compiler /nologo /target:exe "/out:$probeFolder\wheelprobe.exe" $source
     if ($LASTEXITCODE) { throw 'Fixture input-reader compilation failed.' }
     $env:MILESTONE_UX_FIXTURE = Join-Path $fixture 'sample-count.txt'
+    $env:MILESTONE_UX_PROBE_PID = Join-Path $fixture 'probe-pid.txt'
+    $env:MILESTONE_UX_PREVIEW = ''
     $env:LOCALAPPDATA = Join-Path $fixture 'local'
     [IO.Directory]::CreateDirectory($env:LOCALAPPDATA) | Out-Null
     foreach ($sub in 'tools','lib\toolkit\powershell','games\gravel') { [IO.Directory]::CreateDirectory((Join-Path $fixture $sub)) | Out-Null }
@@ -198,6 +224,45 @@ class FixtureProbe {
     Run-Setup @('5','o','x')
     Assert ([IO.File]::ReadAllText($telemetryFile) -ceq $applied) 'Simple Off did not restore only its saved preference.'
 
+    $mappingBeforePreview = [IO.File]::ReadAllBytes($wc)
+    $telemetryBeforePreview = [IO.File]::ReadAllBytes($telemetryFile)
+    $preferenceBeforePreview = [IO.File]::ReadAllBytes($preference)
+    $sampleCount = [int]([IO.File]::ReadAllText($env:MILESTONE_UX_FIXTURE))
+    $previewOutput = Run-Setup @('2','p','x') 6>&1 | Out-String
+    Assert ($previewOutput.Contains('Game-final input, endpoints and deadzones are not verified here.')) 'Preview must distinguish device state from game-final input.'
+    Assert ($previewOutput.Contains('Preview finished. No settings were saved.')) 'Normal preview completion must return to setup.'
+    Assert ([int]([IO.File]::ReadAllText($env:MILESTONE_UX_FIXTURE)) -eq ($sampleCount + 1)) 'One preview must use exactly one input-reader process.'
+    # Stage the opposite handbrake polarity, inspect it, then exit without saving.
+    [IO.File]::WriteAllText($env:MILESTONE_UX_FIXTURE, '0')
+    $previewOutput = Run-Setup @('2','a4','b','','','i','s','p','x') 6>&1 | Out-String
+    Assert ($previewOutput.Contains('Handbrake (axis): Full (100%)')) 'Preview must use staged calibration rather than old saved mapping.'
+    $env:MILESTONE_UX_PREVIEW = 'disconnect'
+    $previewOutput = Run-Setup @('2','p','x') 6>&1 | Out-String
+    Assert ($previewOutput.Contains('Preview stopped. No settings were saved.')) 'Disconnect must return to the settings menu.'
+    $disconnectPid = [int]([IO.File]::ReadAllText($env:MILESTONE_UX_PROBE_PID))
+    Assert-Throws { [Diagnostics.Process]::GetProcessById($disconnectPid) } 'Disconnected input reader is still running.'
+    $env:MILESTONE_UX_PREVIEW = 'hang'
+    Remove-Item -LiteralPath $env:MILESTONE_UX_PROBE_PID -ErrorAction SilentlyContinue
+    $cancelClock = [Diagnostics.Stopwatch]::StartNew()
+    Assert-Throws { Read-WheelInput -Probe (Join-Path $probeFolder 'wheelprobe.exe') -Product '0006346e' -Seconds 10 -CancellationRequested { Test-Path -LiteralPath $env:MILESTONE_UX_PROBE_PID } } 'Cancellation must stop a running input reader.'
+    Assert ($cancelClock.Elapsed.TotalSeconds -lt 4) 'Cancellation did not return promptly.'
+    $cancelPid = [int]([IO.File]::ReadAllText($env:MILESTONE_UX_PROBE_PID))
+    Assert-Throws { [Diagnostics.Process]::GetProcessById($cancelPid) } 'Cancelled input reader is still running.'
+    $timeoutClock = [Diagnostics.Stopwatch]::StartNew()
+    Assert-Throws { Read-WheelInput -Probe (Join-Path $probeFolder 'wheelprobe.exe') -Product '0006346e' -Seconds 1 -CancellationRequested { $false } } 'A stalled input reader must time out.'
+    Assert ($timeoutClock.Elapsed.TotalSeconds -lt 4) 'Input reader timeout did not return promptly.'
+    $timeoutPid = [int]([IO.File]::ReadAllText($env:MILESTONE_UX_PROBE_PID))
+    Assert-Throws { [Diagnostics.Process]::GetProcessById($timeoutPid) } 'Timed-out input reader is still running.'
+    $staleClock = [Diagnostics.Stopwatch]::StartNew()
+    Assert-Throws { Read-WheelInput -Probe (Join-Path $probeFolder 'wheelprobe.exe') -Product '0006346e' -Seconds 10 -CancellationRequested { $false } } 'Lost sample heartbeat must not leave a frozen preview.'
+    Assert ($staleClock.Elapsed.TotalSeconds -lt 5) 'Stale input did not return promptly.'
+    $stalePid = [int]([IO.File]::ReadAllText($env:MILESTONE_UX_PROBE_PID))
+    Assert-Throws { [Diagnostics.Process]::GetProcessById($stalePid) } 'Stale input reader is still running.'
+    $env:MILESTONE_UX_PREVIEW = ''
+    Assert ([Convert]::ToBase64String([IO.File]::ReadAllBytes($wc)) -eq [Convert]::ToBase64String($mappingBeforePreview)) 'Preview changed saved mappings.'
+    Assert ([Convert]::ToBase64String([IO.File]::ReadAllBytes($telemetryFile)) -eq [Convert]::ToBase64String($telemetryBeforePreview)) 'Preview changed saved telemetry.'
+    Assert ([Convert]::ToBase64String([IO.File]::ReadAllBytes($preference)) -eq [Convert]::ToBase64String($preferenceBeforePreview)) 'Preview changed presentation preference.'
+
     $game = Join-Path $fixture 'game-binaries'
     [IO.Directory]::CreateDirectory($game) | Out-Null
     $config = Join-Path $game 'milestone_mod.ini'
@@ -234,6 +299,8 @@ class FixtureProbe {
 } finally {
     $env:LOCALAPPDATA = $oldLocal
     $env:MILESTONE_UX_FIXTURE = $oldFixture
+    $env:MILESTONE_UX_PREVIEW = $oldPreviewMode
+    $env:MILESTONE_UX_PROBE_PID = $oldProbePid
     Remove-Variable -Name MilestoneUxFixtureAnswers -Scope Global -ErrorAction SilentlyContinue
     # Keep fixture and transcript paths for review; no recursive cleanup targets.
     Write-Host "Fixture: $fixture"

@@ -32,6 +32,12 @@ to repair it; the previous file is backed up and its location is shown.
 Button numbers start at 1. Each axis has its own bind/calibration flow, so an
 optional clutch or handbrake never holds up basic setup. Cancel keeps the
 previous assignment; the final Save mappings and exit writes the pending mappings.
+Before saving, **Controls → Preview device input** lets you check the staged
+bindings for 10 seconds: Steering shows Left/Centre/Right and pedals/handbrake
+show Released through Full. **Esc** returns. This preview reads the device;
+the game's final calibration and effective input remain unverified. Custom
+assignments the tool cannot interpret show Preview unavailable. Preview never
+saves or applies anything; Advanced additionally shows raw device values.
 For a custom receiver, select **Telemetry → Connection settings (Advanced)**,
 edit the receiver IPv4 address, port and format, then **Apply connection** or
 **Cancel**. Connection changes save together and keep Telemetry Off/On unchanged.

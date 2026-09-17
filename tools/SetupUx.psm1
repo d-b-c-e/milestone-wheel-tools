@@ -75,13 +75,79 @@ function Format-WheelAssignment([string]$Value, [switch]$Advanced) {
     return $label
 }
 
-function Get-AxisSamples([string[]]$Lines) {
+function Get-AxisSamples([string[]]$Lines, [switch]$AllowOutOfRange) {
     foreach ($line in $Lines) {
         if ($line -notmatch '^AX ((?:-?\d+ ){7}-?\d+)$') { continue }
         $values = @($Matches[1] -split ' ' | ForEach-Object { [int]$_ })
-        if (@($values | Where-Object { $_ -lt 0 -or $_ -gt 65535 }).Count) { continue }
+        if (-not $AllowOutOfRange -and @($values | Where-Object { $_ -lt 0 -or $_ -gt 65535 }).Count) { continue }
         # An object keeps each eight-value sample together in the pipeline.
         [pscustomobject]@{ Values = $values }
+    }
+}
+
+function Get-DeviceInputPreview([string]$Mapping, [int[]]$Values, [switch]$Steering) {
+    if ([string]::IsNullOrWhiteSpace($Mapping)) { return [pscustomobject]@{ Available=$false; Label='Not bound'; Value=$null; Raw=$null; Clamped=$false } }
+    # Only the two transforms the setup tool creates are known here. Do not
+    # guess the meaning of game-specific curves, button mappings or offsets.
+    if ($Mapping -notmatch '^Axis([1-8])&(1(?:\.0+)?&0(?:\.0+)?|-1(?:\.0+)?&1(?:\.0+)?)$') {
+        return [pscustomobject]@{ Available=$false; Label='Preview unavailable for this custom assignment'; Value=$null; Raw=$null; Clamped=$false }
+    }
+    if ($null -eq $Values -or $Values.Count -ne 8) { return [pscustomobject]@{ Available=$false; Label='Waiting for device input'; Value=$null; Raw=$null; Clamped=$false } }
+    $axis = [int]$Matches[1] - 1
+    $inverted = $Matches[2].StartsWith('-')
+    $raw = $Values[$axis]
+    $normalized = [Math]::Max(0.0, [Math]::Min(1.0, $raw / 65535.0))
+    if ($inverted) { $normalized = 1.0 - $normalized }
+    if ($Steering) {
+        $value = $normalized * 2.0 - 1.0
+        $percent = [Math]::Round([Math]::Abs($value) * 100)
+        $label = if ($percent -eq 0) { 'Centre' } elseif ($value -lt 0) { "Left $percent%" } else { "Right $percent%" }
+    } else {
+        $value = $normalized
+        $percent = [Math]::Round($value * 100)
+        $label = if ($percent -eq 0) { 'Released (0%)' } elseif ($percent -eq 100) { 'Full (100%)' } else { "$percent%" }
+    }
+    [pscustomobject]@{ Available=$true; Label=$label; Value=$value; Raw=$raw; Clamped=($raw -lt 0 -or $raw -gt 65535) }
+}
+
+function Read-WheelInput([string]$Probe, [string]$Product, [ValidateRange(1,30)][int]$Seconds, [scriptblock]$CancellationRequested) {
+    # One owner for one input-only process. All callers get the same bounded
+    # cleanup on Esc, device error, native exit or a helper that stops responding.
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = $Probe
+    $info.Arguments = "$Product $Seconds"
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($info)
+    $errors = $process.StandardError.ReadToEndAsync()
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    $lastSample = 0.0
+    try {
+        $pending = $process.StandardOutput.ReadLineAsync()
+        while ($true) {
+            $cancel = $false
+            if ($CancellationRequested) { $cancel = [bool](& $CancellationRequested) }
+            else { try { if ([Console]::KeyAvailable) { $cancel = [Console]::ReadKey($true).Key -eq 'Escape' } } catch { } }
+            if ($cancel) { throw [OperationCanceledException]::new('Cancelled. No assignment was changed.') }
+            if ($timer.Elapsed.TotalSeconds -gt ($Seconds + 1)) { throw [TimeoutException]::new('The input reader timed out. Reconnect the device and try again.') }
+            # wheelprobe sends an AX heartbeat every second even without movement.
+            if ($timer.Elapsed.TotalSeconds - $lastSample -gt 2.5) { throw [IO.IOException]::new('Device samples stopped. Check the connection and retry.') }
+            if (-not $pending.Wait(50)) { continue }
+            $line = $pending.Result
+            if ($null -eq $line) { break }
+            if ($line -like 'ERR *') { throw $line.Substring(4) }
+            if ($line.StartsWith('AX ')) { $lastSample = $timer.Elapsed.TotalSeconds }
+            $line
+            $pending = $process.StandardOutput.ReadLineAsync()
+        }
+        $remainingMs = [Math]::Max(1, [int](($Seconds + 1 - $timer.Elapsed.TotalSeconds) * 1000))
+        if (-not $process.WaitForExit($remainingMs)) { throw [TimeoutException]::new('The input reader timed out. Reconnect the device and try again.') }
+        if ($process.ExitCode -ne 0) { throw "Input reader stopped. Reconnect the device and try again. $($errors.Result)" }
+    } finally {
+        if (-not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
+        $process.Dispose()
     }
 }
 
@@ -218,4 +284,4 @@ function Save-TelemetryConfig([string]$Path, [string]$Original, [string]$Text) {
     return $backup
 }
 
-Export-ModuleMember -Function Get-SettingsView,Save-SettingsView,Get-WheelBlock,Get-WheelField,Set-WheelField,Format-WheelAssignment,Get-AxisSamples,Find-AxisMapping,Save-WheelConfig,Get-ModSetting,Set-ModSetting,Get-TelemetryState,Assert-TelemetryConnection,Get-TelemetryReceiver,Get-TelemetryConnectionSummary,Set-TelemetryFields,Save-TelemetryConfig
+Export-ModuleMember -Function Get-SettingsView,Save-SettingsView,Get-WheelBlock,Get-WheelField,Set-WheelField,Format-WheelAssignment,Get-AxisSamples,Get-DeviceInputPreview,Read-WheelInput,Find-AxisMapping,Save-WheelConfig,Get-ModSetting,Set-ModSetting,Get-TelemetryState,Assert-TelemetryConnection,Get-TelemetryReceiver,Get-TelemetryConnectionSummary,Set-TelemetryFields,Save-TelemetryConfig

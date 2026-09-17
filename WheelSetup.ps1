@@ -240,35 +240,7 @@ Ok $dev.Name
 
 # ------------------------------------------------------------------ helpers
 function Sample([int]$Seconds) {
-    # This helper only reads input; cancelling it cannot leave an FFB effect.
-    $info = New-Object Diagnostics.ProcessStartInfo
-    $info.FileName = $probe
-    $info.Arguments = "$($dev.Key) $Seconds"
-    $info.UseShellExecute = $false
-    $info.CreateNoWindow = $true
-    $info.RedirectStandardOutput = $true
-    $info.RedirectStandardError = $true
-    $process = [Diagnostics.Process]::Start($info)
-    $errors = $process.StandardError.ReadToEndAsync()
-    try {
-        $pending = $process.StandardOutput.ReadLineAsync()
-        while ($true) {
-            $cancel = $false
-            try { if ([Console]::KeyAvailable) { $cancel = [Console]::ReadKey($true).Key -eq 'Escape' } } catch { }
-            if ($cancel) { throw [OperationCanceledException]::new('Cancelled. The previous assignment was kept.') }
-            if (-not $pending.Wait(50)) { continue }
-            $line = $pending.Result
-            if ($null -eq $line) { break }
-            if ($line -like 'ERR *') { throw $line.Substring(4) }
-            $line
-            $pending = $process.StandardOutput.ReadLineAsync()
-        }
-        $process.WaitForExit()
-        if ($process.ExitCode -ne 0) { throw "Input reader stopped. Reconnect the device and try again. $($errors.Result)" }
-    } finally {
-        if (-not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
-        $process.Dispose()
-    }
+    Read-WheelInput -Probe $probe -Product $dev.Key -Seconds $Seconds
 }
 
 $AXES = [ordered]@{
@@ -367,6 +339,62 @@ function Edit-Button([string]$Name) {
     } catch { Warn $_.Exception.Message }
 }
 
+function Show-DeviceInputPreview {
+    $selectedGameFolder = $innerGameFolder.TrimEnd('\') + '\'
+    $running = Get-Process -EA SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($selectedGameFolder, [StringComparison]::OrdinalIgnoreCase) }
+    if ($running) { Warn 'Close the game before previewing device input.'; return }
+    Head 'Device input preview - read only'
+    Say '  Move the wheel, pedals or handbrake. Esc returns; preview ends after 10 seconds.'
+    Say '  Uses the current staged assignments, before the game calibration.'
+    Say '  Game-final input, endpoints and deadzones are not verified here.'
+    if ($View -eq 'Advanced') { Say '  Device range: 0-65535; normalized values are clamped to this range.' }
+    $names = @($AXES.Keys | Where-Object { $_ -ne 'Clutch' -or (Get-Field $AXES[$_]) })
+    $anchor = $null
+    $seen = $false
+    $lastDraw = -1.0
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        if (-not [Console]::IsOutputRedirected) {
+            foreach ($name in $names) { Write-Host '' }
+            $anchor = [Math]::Max(0, [Console]::CursorTop - $names.Count)
+        }
+    } catch { $anchor = $null }
+    try {
+        # This is one helper invocation for the whole preview, not one device
+        # connection per row. Sample owns cancellation and process cleanup.
+        Sample 10 | ForEach-Object {
+            $samples = @(Get-AxisSamples @($_) -AllowOutOfRange)
+            if ($samples.Count) {
+                $seen = $true
+                if ($lastDraw -lt 0 -or $clock.Elapsed.TotalSeconds - $lastDraw -ge 0.1) {
+                    $lastDraw = $clock.Elapsed.TotalSeconds
+                    $rows = @()
+                    foreach ($name in $names) {
+                        $value = Get-DeviceInputPreview (Get-Field $AXES[$name]) $samples[0].Values -Steering:($name -eq 'Steering')
+                        $line = "  ${name}: $($value.Label)"
+                        if ($value.Clamped) { $line += ' (outside default range; clamped)' }
+                        if ($View -eq 'Advanced' -and $value.Available) { $line += " | Raw: $($value.Raw)" }
+                        $rows += $line
+                    }
+                    if ($null -ne $anchor) {
+                        try {
+                            $width = [Math]::Max(1, [Console]::WindowWidth - 1)
+                            [Console]::SetCursorPosition(0, $anchor)
+                            foreach ($row in $rows) { Write-Host $row.Substring(0, [Math]::Min($row.Length, $width)).PadRight($width) }
+                        } catch { $anchor = $null; $rows | ForEach-Object { Say $_ } }
+                    } else { $rows | ForEach-Object { Say $_ } }
+                }
+            }
+        }
+        if (-not $seen) { Warn 'No device samples received. Check the connection and retry.' }
+        else { Say '  Preview finished. No settings were saved.' }
+    } catch [OperationCanceledException] { Say '  Preview cancelled. No settings were saved.' }
+    catch { Warn "Preview stopped. No settings were saved. $($_.Exception.Message)" }
+    finally {
+        if ($null -ne $anchor) { try { [Console]::SetCursorPosition(0, $anchor + $names.Count + 1) } catch { } }
+    }
+}
+
 function Read-TelemetrySnapshot {
     if (-not (Test-Path -LiteralPath $telemetryPath -PathType Leaf)) { throw 'Telemetry settings are not installed for this game. Run Install.bat, then reopen setup.' }
     $text = [IO.File]::ReadAllText($telemetryPath)
@@ -437,7 +465,7 @@ while ($true) {
         'Controls' {
             $names = @($AXES.Keys)
             for ($i = 0; $i -lt 4; $i++) { Say "  [A$($i+1)] $($names[$i]): $(Assignment (Get-Field $AXES[$names[$i]]))" }
-            Say '  [B] Driving and menu buttons  [C] Clutch'
+            Say '  [B] Driving and menu buttons  [C] Clutch  [P] Preview device input'
             Say '  Handbrake axis and button assignments are independent; final combination is controlled by the game.'
             if ($View -eq 'Advanced') { Say '  [R] Raw mapping details' }
         }
@@ -522,6 +550,7 @@ while ($true) {
             }
         }
         'c' { if ($page -eq 'Controls') { Edit-Axis 'Clutch' } }
+        'p' { if ($page -eq 'Controls') { Show-DeviceInputPreview } }
         { $_ -match '^a([1-4])$' } {
             if ($page -eq 'Controls') {
                 $axisChoice = [int]$command.Substring(1) - 1

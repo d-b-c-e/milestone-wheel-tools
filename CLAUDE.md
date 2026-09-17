@@ -50,6 +50,12 @@ Off/On in Simple, and applies Advanced connection drafts atomically. The native
 sender calls `loadConfig()` only once from `proxyInit()`, so label these settings
 for the **next game launch**, never live delivery/stop controls. Its unchanged
 `inet_pton(AF_INET)` route accepts IPv4 addresses, not DNS names or IPv6.
+Controls offers an on-demand, read-only device preview using staged mappings.
+`Read-WheelInput` in SetupUx.psm1 owns the single input-helper process for
+preview and capture, with cancellation and a supervised timeout. The preview
+understands only the normal/inverted Axis1-8 transforms this setup tool writes;
+do not present custom transforms as known or describe device normalization as
+verified game-final input. No preview action writes owner settings.
 
 Offline checks (synthetic input-reader process and disposable fixture only):
 

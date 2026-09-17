@@ -5,6 +5,8 @@ UX-1 / UX-01-S and its controls/cameras and installation companion documents.
 Source baseline: **411f351**, toolkit runtime pin **v0.8.0**, unchanged.
 Initial implementation: **4ac0f117265ddf4d846f0d699e5d4bf3d7add3db**.
 The follow-up closes the saved-telemetry editor and malformed-view recovery gaps.
+Published candidate before preview: **05fd6dc2f79508df2125106cca080e3e9d7ab5e5**.
+The next bounded change adds read-only device preview, without native changes.
 Also compared with the toolkit's `docs/reference/wheel-settings.html` on
 2026-09-17 (SHA256
 `cd64239d2a4f092a69d74d05fe8a85e915509fd8686d19a7df2cf18ac8323996`).
@@ -44,6 +46,17 @@ save leaves buttons unavailable unless using the verified Gravel defaults.
 - Each axis can be bound independently. Separate rest and movement samples
   determine polarity; the old formula always classified a moving pedal as
   low-rest. Multiple moving axes now reject capture rather than choosing one.
+- Controls → Preview device input is available on demand in Simple. It uses
+  staged assignments and shows Steering Left/Centre/Right and pedal/handbrake
+  Released/Full percentages. Only known normal/inverted Axis1-8 transforms are
+  interpreted; custom mappings say Preview unavailable. Advanced adds raw
+  values. Device normalization is explicitly distinguished from the game's
+  final calibration, deadzones and effective input.
+- One input-only helper process owns each preview, capped at 10 seconds.
+  Esc, native exit, device error, lost sample heartbeat and a supervised timeout all clean up the
+  process and return; no mappings, telemetry or presentation state are saved.
+  The same process owner handles calibration captures. Preview checks the
+  selected game is still closed before reading input.
 - Esc cancels active input capture; every proposal has a cancel path. No
   binding changes until accepted. Axis and button handbrake fields stay
   independent, including cancellation. Button conflicts/shared game slots are
@@ -91,6 +104,7 @@ recorded as gaps; their existence in a text file does not mean UI adoption.
 | Handbrake axis (`Wheel_Handbrake`) | Controls | Simple | Optional; independent of game button slot | Accept/cancel integration; button-preservation checks |
 | Clutch (`Wheel_Clutch`) | Controls | Simple on demand | Optional, individually selected | Same axis workflow; physical behavior not tested |
 | Axis direction/inversion, Bind / Clear / Save calibration / Cancel | Controls | Simple on demand | Measured direction; retains previous assignment on cancel | Capture and file fixtures; live Esc key not physically exercised |
+| Preview device input | Controls | Simple on demand; raw values Advanced only | Read-only, 10 seconds/Esc, staged mappings; fixed device-range normalization, not game-final input | Centre/left/right, inverted released/full, clamping, custom-unavailable, staged polarity, disconnect/cancel/timeout cleanup and no-write fixtures |
 | Gear up/down, Handbrake button, Rewind, Pause, Confirm, Back, Respawn, Photo mode (resolved Wheel_* slots) | Controls | Simple on demand | Existing game actions; friendly labels and 1-based button numbers | Action resolution source; shared-slot warning; real button capture not tested |
 | Change camera (`SwitchCamera` resolved slot) | Cameras and Controls | Simple on demand | Same shared binding operation | Menu fixture; stock game camera cycle unchanged |
 | Raw mapping block, product key/type, config and preference paths | Controls / Help | Advanced only | Inspection; no extra binding store | Advanced navigation fixture |
@@ -129,20 +143,25 @@ after the editor has opened. No socket is created by the fixture or setup tool.
 Preference recovery is exercised from malformed JSON through Simple fallback,
 explicit Advanced selection and reload, including a denied replacement that
 preserves the original bytes and a successful byte-for-byte backup.
+Preview tests cover mapped values, inversion, neutral/full and out-of-range
+clamping. Interactive fixture navigation confirms staged polarity is used;
+saved mapping, telemetry and preference bytes remain identical afterwards.
+Injected cancellation, stalled-reader and lost-heartbeat tests verify prompt return and actual
+child-process termination. These use the synthetic reader, not real hardware.
 
 Validation completed **2026-09-17**, before any game deployment:
 
 | Check | Result |
 |---|---|
-| Windows PowerShell 5.1.26100.9444: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/tests/Test-SetupUx.ps1` | **106 passed** |
-| PowerShell 7.6.5: `pwsh -NoProfile -File tools/tests/Test-SetupUx.ps1` | **106 passed** |
+| Windows PowerShell 5.1.26100.9444: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/tests/Test-SetupUx.ps1` | **140 passed** |
+| PowerShell 7.6.5: `pwsh -NoProfile -File tools/tests/Test-SetupUx.ps1` | **140 passed** |
 | `git diff --check` and PowerShell parsing | Passed |
 | Runtime / vendored / prebuilt DLL diff | No changes |
 
 Local transcripts: `E:\Source\milestone-wheel-tools-ux-20260916-ps51-test.log`
 and `E:\Source\milestone-wheel-tools-ux-20260916-ps7-test.log`. Final fixture
-directories end in `milestone-ux-0af2639d0ebc4e25883b9ddef11daee3` (5.1) and
-`milestone-ux-52624220f854485e964f2f4a62dfe046` (7.6.5) under the user's Temp.
+directories end in `milestone-ux-2d670635aed9482d9ee9a911c2dd0782` (5.1) and
+`milestone-ux-98a30ab466d4422ca037242854f4c2c6` (7.6.5) under the user's Temp.
 They contain only generated settings, test code and inert/synthetic binaries.
 
 The native proxy and vendored toolkit were unchanged, so no force smoke or
@@ -152,9 +171,10 @@ Full UX-1 adoption is still blocked by real product work:
 
 1. No F6 in-game renderer. This is an intentional bounded surface exception for
    this pass, not completion of the shared runtime UI requirement.
-2. No live calibrated preview, endpoint/deadzone UI, independent per-action
-   device identities, physical duplicate-instance selection, or real-time
-   game input verification. Finish endpoints/deadzones in the game's setup.
+2. Device-range preview is implemented, but verified game-final input and
+   endpoint/deadzone UI, independent per-action device identities and physical
+   duplicate-instance selection are still missing. Finish endpoints/deadzones
+   in the game's setup; device percentages do not establish game calibration.
 3. Game-owned FFB lacks the mod-level saved Off/On, Stop FFB/F8, steering-derived
    dropdown and lifecycle status required by the shared mod contract.
 4. No added Bonnet/Bumper mounts, camera ownership hooks or numpad/rebinding
@@ -168,7 +188,8 @@ Full UX-1 adoption is still blocked by real product work:
    config + whitelist rollback, and no fully bundled release artifact tested
    here. No package or public release was published.
 
-Not tested: attended physical capture (including Esc), live combined analog /
+Not tested: attended physical capture/preview (including the real Esc key and
+console cursor redraw), live combined analog /
 button handbrake, hot unplug, game first drive, FFB feel, 720p/4K terminal
 readability, real Steam discovery with several installed games, or each
 unverified game's wheel/action semantics. The fixture checks do not establish
