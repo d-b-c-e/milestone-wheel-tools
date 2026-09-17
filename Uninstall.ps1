@@ -3,10 +3,11 @@
     Remove the Milestone telemetry mod from a game.
 
 .DESCRIPTION
-    Deletes dinput8.dll, milestone_mod.ini and any log it wrote, but only when
+    Deletes dinput8.dll and any log it wrote, but only when
     the DLL is actually ours - a dinput8.dll belonging to another tool is left
     alone. The WheelConfig.ini entry is left in place: it is harmless, and
-    removing it would lose your calibrated pedal axes.
+    removing it would lose your calibrated pedal axes. Personal mod settings
+    are kept unless -RemoveSettings is explicitly supplied; dated backups stay.
 
 .EXAMPLE
     .\Uninstall.ps1
@@ -15,7 +16,8 @@
 [CmdletBinding()]
 param(
     [string]$Game,
-    [string]$GamePath
+    [string]$GamePath,
+    [switch]$RemoveSettings
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,9 +66,12 @@ if (Test-Path $dll) {
         Warn "dinput8.dll here belongs to another tool - left alone"
     }
 }
-foreach ($f in 'milestone_mod.ini', 'milestone_mod.ini.bak', 'milestone_mod.log') {
+$removeFiles = @('milestone_mod.log')
+if ($RemoveSettings) { $removeFiles += @('milestone_mod.ini', 'milestone_mod.ini.bak') }
+foreach ($f in $removeFiles) {
     $p = Join-Path $GamePath $f
     if (Test-Path $p) { Remove-Item $p -Force; Ok "removed $f" }
 }
+if (-not $RemoveSettings) { Write-Host '  Your mod settings and backups were kept for a future reinstall.' -ForegroundColor Gray }
 Write-Host "`n  The wheel's WheelConfig.ini entry was left in place - it is harmless," -ForegroundColor Gray
 Write-Host "  and removing it would lose your calibrated pedal axes." -ForegroundColor Gray

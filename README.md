@@ -9,11 +9,31 @@ telemetry at all**. This fixes all three from the outside.
 
 | you want | run |
 |---|---|
-| the game to see your wheel, and telemetry in SimHub | `.\Install.ps1` |
-| to map controls without fighting the in-game menu | `.\WheelSetup.ps1` |
+| the game to see your wheel, and telemetry in SimHub | double-click `Install.bat` |
+| to map controls without fighting the in-game menu | double-click `WheelSetup.bat` |
 
-Both detect your wheel and find the game themselves. There is nothing to
-configure by hand.
+Both detect your wheel and find the game themselves. **Gravel is the verified
+game; the other Milestone titles below are still unverified candidates.**
+
+## First drive
+
+Close the game, run **Install.bat**, then open **WheelSetup.bat**. Setup opens in
+**Simple**: bind Steering, Throttle and Brake, add any handbrake or buttons you
+use, then **Save and exit**. Run the game's own wheel calibration once and drive.
+Telemetry is optional; the installer prints the receiver and port to use.
+
+The six pages are **Setup, Controls, FFB, Cameras, Telemetry, Help**. Use
+**View: Simple / Advanced** to reveal raw mappings and technical details. The
+choice is remembered; switching views changes no bindings, tune or telemetry.
+Button numbers start at 1. Each axis has its own bind/calibration flow, so an
+optional clutch or handbrake never holds up basic setup. Cancel keeps the
+previous assignment; the final Save and exit writes the pending mappings.
+
+**This is an external setup tool, not an F6 game panel.** The game still owns
+FFB, camera views, final endpoint/deadzone calibration and input combination.
+This mod adds no Bonnet/Bumper mounts or camera adjustment shortcuts. See the
+[UX adoption notes](docs/UX-OVERNIGHT-2026-09-16.md) for the exact scope and
+remaining shared-standard gaps.
 
 > **Wheel not detected in Gravel?** That is the first thing this fixes — see
 > [what it actually does](#what-it-actually-does) below, or jump to
@@ -84,7 +104,7 @@ installs the DLL and a matching config, adds the wheel to the game's device
 whitelist, and prints exactly what to select in SimHub. Close the game first —
 it locks the files.
 
-Useful switches:
+Advanced installer switches (ordinary updates keep existing settings):
 
 ```powershell
 .\Install.ps1 -Port 8000 -Format fh4              # match your SimHub setup
@@ -118,11 +138,15 @@ outside the game instead:
 It finds the game, reads the game's own action list out of its save file,
 detects your wheel, and then:
 
-- **Calibrate pedals** — work each pedal through its travel and it identifies
-  which axis moved and which way, deriving the polarity. Copying another
-  wheel's block is what leaves a game convinced a pedal is held down.
-- **Bind a control** — pick *"Rewind"* or *"Change camera"*, press the button
-  you want, done.
+- **Controls → Steering / Throttle / Brake / Handbrake (axis) / Clutch** — select
+  only the input you want to bind. Measure rest and full movement, check its
+  direction, then Save calibration or Cancel. Esc cancels a running input
+  capture. Run the game calibration afterwards for endpoints and deadzones.
+- **Controls → Driving and menu buttons** — choose *Rewind*, *Change camera*
+  or another action, press the button, then save or cancel. A handbrake button
+  can stay assigned alongside its axis. The game determines how they combine.
+- **Advanced → Controls → Raw mapping details** — inspect the underlying
+  profile when troubleshooting; Simple shows readable assignments instead.
 
 That second one hides an indirection you would otherwise have to work out
 yourself. These games bind in two layers — physical button → logical slot
@@ -135,7 +159,10 @@ nothing at all reads `Wheel_GearUp`.
 Reading all 128 buttons needs `c_dfDIJoystick2`, which is why
 `tools/wheelprobe` is a small native helper rather than pure PowerShell.
 
-Run the game's wheel calibration once afterwards.
+Run the game's wheel calibration once afterwards. Changes are staged until
+Save and exit. A failed save leaves the old file intact, and each successful
+save creates a dated backup. If the file changes while setup is open, reopen
+setup before saving so another tool's changes are not overwritten.
 
 ## Setting up SimHub
 
@@ -167,9 +194,10 @@ status line covering every channel at once.
 
 ## Uninstall
 
-```powershell
-.\Uninstall.ps1
-```
+Double-click **Uninstall.bat** (or run `.\Uninstall.ps1`). Personal mod settings,
+backups and wheel bindings are kept for a future reinstall. Updates also keep
+existing tuning, telemetry Off/On, custom destinations and the saved wheel;
+explicit `-Port`, `-Format` or `-Product` switches update only those choices.
 
 Or delete `dinput8.dll` and `milestone_mod.ini` from the game folder. The
 `WheelConfig.ini` entry is harmless if left, and Steam's *Verify integrity of

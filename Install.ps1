@@ -43,7 +43,7 @@
 param(
     [string]$Game,
     [string]$GamePath,
-    [int]$Port = 5300,
+    [ValidateRange(1,65535)][int]$Port = 5300,
     [ValidateSet('fh4', 'fm7', 'sled')][string]$Format = 'fh4',
     [string]$Product,
     [switch]$SkipWheelConfig
@@ -51,6 +51,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
+Import-Module (Join-Path $root 'tools\SetupUx.psm1') -Force
 
 function Say($m, $c = 'Gray') { Write-Host $m -ForegroundColor $c }
 function Step($m) { Write-Host "`n$m" -ForegroundColor Cyan }
@@ -120,6 +121,9 @@ if ($GamePath) {
     if (-not $target) { Die "invalid choice" }
 }
 Ok "$($target.Name)  ->  $($target.Path)"
+$destIni = Join-Path $target.Path 'milestone_mod.ini'
+$existingIni = if (Test-Path -LiteralPath $destIni) { [IO.File]::ReadAllText($destIni) } else { $null }
+$savedProduct = if ($existingIni) { Get-ModSetting $existingIni 'proxy' 'product' } else { '' }
 
 # --------------------------------------------------------- detect the wheel
 # DirectInput builds guidProduct.Data1 as (PID << 16) | VID, which is exactly
@@ -135,8 +139,12 @@ function Get-Wheels {
 
 Step "Detecting your wheel"
 if ($Product) {
+    if ($Product -notmatch '^[a-fA-F0-9]{8}$') { Die 'Product must be the eight-digit device product key.' }
     $productKey = $Product.ToLower()
     Ok "using the key you gave: $productKey"
+} elseif ($savedProduct) {
+    $productKey = $savedProduct
+    Ok 'Keeping the saved wheel selection'
 } else {
     $devs = @(Get-Wheels)
     if (-not $devs) { Die "No DirectInput game controllers attached. Plug the wheel in and switch it on." }
@@ -189,17 +197,24 @@ Ok "dinput8.dll"
 
 $iniSrc = Join-Path $root "games\$($target.Name.ToLower() -replace '\s','')\milestone_mod.ini"
 if (-not (Test-Path $iniSrc)) { $iniSrc = Join-Path $root 'games\gravel\milestone_mod.ini' }
-$ini = Get-Content $iniSrc -Raw
-$ini = $ini -replace '(?m)^product=.*', "product=$productKey"
-$ini = $ini -replace '(?m)^port=.*',    "port=$Port"
-$ini = $ini -replace '(?m)^format=.*',  "format=$Format"
-$destIni = Join-Path $target.Path 'milestone_mod.ini'
-if (Test-Path $destIni) {
-    Copy-Item $destIni "$destIni.bak" -Force
-    Warn "existing milestone_mod.ini backed up to milestone_mod.ini.bak"
-}
-Set-Content $destIni $ini -NoNewline
-Ok "milestone_mod.ini  (product=$productKey, port=$Port, format=$Format)"
+$ini = if ($null -ne $existingIni) { $existingIni } else { [IO.File]::ReadAllText($iniSrc) }
+# View/setup adoption must never rerun defaults over an owner's working tune.
+if ($null -eq $existingIni -or $PSBoundParameters.ContainsKey('Product')) { $ini = Set-ModSetting $ini 'proxy' 'product' $productKey }
+if ($null -eq $existingIni -or $PSBoundParameters.ContainsKey('Port')) { $ini = Set-ModSetting $ini 'telemetry' 'port' ([string]$Port) }
+if ($null -eq $existingIni -or $PSBoundParameters.ContainsKey('Format')) { $ini = Set-ModSetting $ini 'telemetry' 'format' $Format }
+if ($ini -cne $existingIni) {
+    if ($null -ne $existingIni) {
+        $backup = "$destIni.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')-$([guid]::NewGuid().ToString('N').Substring(0,6))"
+        Copy-Item -LiteralPath $destIni -Destination $backup
+        Ok "Previous settings backed up: $backup"
+    }
+    [IO.File]::WriteAllText($destIni, $ini)
+} else { Ok 'Existing settings kept, including bindings, telemetry and tuning' }
+$Port = [int](Get-ModSetting $ini 'telemetry' 'port')
+$Format = Get-ModSetting $ini 'telemetry' 'format'
+$telemetryHost = Get-ModSetting $ini 'telemetry' 'host'
+$telemetryEnabled = Get-ModSetting $ini 'telemetry' 'enabled'
+Ok "Telemetry: $(if ($telemetryEnabled -eq '0') { 'Off' } else { 'On' }) - $telemetryHost`:$Port ($Format)"
 
 # ---------------------------------------------------- the wheel whitelist
 if (-not $SkipWheelConfig -and $target.Root) {
@@ -217,7 +232,7 @@ if (-not $SkipWheelConfig -and $target.Root) {
                 & python (Join-Path $root 'tools\wheelconfig.py') --ini $wc --product $productKey `
                     --name "Wheel $productKey" --steer Axis1 --polarity low | Out-Null
                 Ok "added (run the game's wheel calibration once)"
-                Warn "pedal axes are a guess - run tools\Measure-WheelAxes.ps1 to set them properly"
+                Warn 'Run WheelSetup.bat to bind and calibrate your own steering and pedals.'
             } else {
                 Warn "Python not found, so WheelConfig.ini was left alone."
                 Warn "Add the wheel manually, or install Python and re-run."
@@ -230,11 +245,14 @@ if (-not $SkipWheelConfig -and $target.Root) {
 Step "Done"
 Say @"
   Next:
-    1. In SimHub choose the game matching format=$Format
+    1. Open WheelSetup.bat. In Simple, bind Steering, Throttle and Brake.
+       Add a handbrake and buttons if you use them, then Save and exit.
+    2. Launch the game, run its wheel calibration once, and drive.
+    3. Optional telemetry: in SimHub choose the game matching format=$Format
          fh4  -> Forza Horizon 4  or  Forza Horizon 5
          fm7  -> Forza Motorsport 7
-       and set its UDP port to $Port.
-    2. Launch the game and drive.
+       and set its UDP port to $Port. Destination: $telemetryHost.
+       Telemetry is currently $(if ($telemetryEnabled -eq '0') { 'Off (your saved choice was kept)' } else { 'On' }).
 
   If nothing shows up, milestone_mod.log appears next to the game exe and
   SimHub's own log (SimHub\Logs\SimHub.txt) says whether it accepted the

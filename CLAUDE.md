@@ -36,6 +36,26 @@ plain atomics; the sender thread reads them.
 
 ## Build, deploy, test
 
+The 2026-09-16 settings work adopts the toolkit's Simple/Advanced presentation
+contract in the existing **external** PowerShell tool. Read
+`docs/UX-OVERNIGHT-2026-09-16.md` before claiming full UX-1 compliance: there is
+no F6 renderer or camera/FFB control layer here. The shared guidance commit is
+`a84bebab5ec2abdcd5140b9c63c139ccff86a7d3`; the runtime toolkit pin stays v0.8.0.
+Presentation state lives in LocalAppData, separately from game configuration.
+`tools/SetupUx.psm1` owns pure view/mapping helpers; do not couple view choice to
+runtime defaults or device selection. `Install.ps1` preserves existing tuning
+unless a specific override was supplied. Ordinary uninstall retains settings.
+
+Offline checks (synthetic input-reader process and disposable fixture only):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/tests/Test-SetupUx.ps1
+pwsh -NoProfile -File tools/tests/Test-SetupUx.ps1
+```
+
+These check file migration, capture cancellation and terminal navigation, not
+physical input, terminal readability at different DPI, force output or a drive.
+
 ```bash
 ./build.sh                    # -> build/dinput8.dll (x64, MSYS2 MinGW-w64 GCC 16)
 ```

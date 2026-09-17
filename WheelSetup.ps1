@@ -27,18 +27,32 @@
 .PARAMETER Product
     Device product key in hex, to skip the device menu.
 
+.PARAMETER View
+    Simple or Advanced. An explicit choice is remembered without changing mappings.
+
+.PARAMETER SettingsSave
+    Exact settings.sav for the selected game when its save cannot be discovered.
+
+.PARAMETER PreferencesPath
+    Optional presentation-preference location. Does not replace game configuration.
+
 .EXAMPLE
     .\WheelSetup.ps1
 #>
 [CmdletBinding()]
 param(
     [string]$GamePath,
-    [string]$Product
+    [string]$Product,
+    [string]$SettingsSave,
+    [ValidateSet('Simple', 'Advanced')][string]$View,
+    [string]$PreferencesPath = (Join-Path $env:LOCALAPPDATA 'DBCE\MilestoneWheelTools\settings-view.json')
 )
 
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $probe = Join-Path $root 'tools\wheelprobe\wheelprobe.exe'
+if (-not (Test-Path $probe)) { $probe = Join-Path $root 'dist\wheelprobe.exe' }
+Import-Module (Join-Path $root 'tools\SetupUx.psm1') -Force
 
 function Say($m, $c = 'Gray') { Write-Host $m -ForegroundColor $c }
 function Head($m) { Write-Host "`n$m" -ForegroundColor Cyan }
@@ -46,8 +60,20 @@ function Ok($m) { Write-Host "  OK   $m" -ForegroundColor Green }
 function Warn($m) { Write-Host "  !    $m" -ForegroundColor Yellow }
 function Die($m) { Write-Host "  X    $m" -ForegroundColor Red; exit 1 }
 
+try {
+    if ($View) { Save-SettingsView $PreferencesPath $View }
+    else { $View = Get-SettingsView $PreferencesPath }
+} catch { Warn $_.Exception.Message; $View = 'Simple' }
+
+function Pick-Number([string]$Prompt, [int]$Count) {
+    $answer = Read-Host "$Prompt (1-$Count, Enter to cancel)"
+    $number = 0
+    if ([int]::TryParse($answer, [ref]$number) -and $number -ge 1 -and $number -le $Count) { return ($number - 1) }
+    return -1
+}
+
 if (-not (Test-Path $probe)) {
-    Die "tools\wheelprobe\wheelprobe.exe is missing. Build it, or take it from the release."
+    Die 'The input reader is missing. Restore dist\wheelprobe.exe from the release, then reopen setup.'
 }
 
 # ---------------------------------------------------------------- the game
@@ -57,7 +83,8 @@ $toolkit = Join-Path $root 'lib\toolkit\powershell\DbceWheel.psm1'
 if (-not (Test-Path $toolkit)) { Die "lib\toolkit is missing - run tools\Sync-Toolkit.ps1, or re-download the release" }
 Import-Module $toolkit -Force
 
-Say "Milestone wheel setup" 'White'
+Say "Wheel settings - Milestone" 'White'
+Say "View: $View | External setup - close the game before making changes."
 Head "Finding the game"
 $wheelConfigs = @()
 if ($GamePath) {
@@ -80,7 +107,9 @@ if (-not $wheelConfigs) { Die "No WheelConfig.ini found. Pass -GamePath <game fo
 if ($wheelConfigs.Count -gt 1) {
     Say "  Found several:"
     for ($i = 0; $i -lt $wheelConfigs.Count; $i++) { Say "    [$($i+1)] $($wheelConfigs[$i].FullName)" }
-    $wc = $wheelConfigs[[int](Read-Host "  Which game? (1-$($wheelConfigs.Count))") - 1].FullName
+    $choice = Pick-Number '  Choose a game' $wheelConfigs.Count
+    if ($choice -lt 0) { return }
+    $wc = $wheelConfigs[$choice].FullName
 } else { $wc = $wheelConfigs[0].FullName }
 Ok $wc
 
@@ -95,11 +124,18 @@ if ($running) { Die "$($running[0].ProcessName) is running - it rewrites WheelCo
 # as ActionName / KeyName property pairs. KeyName is a keyboard key, a Gamepad_*
 # key, or the Wheel_* slot we care about.
 function Get-ActionSlots {
-    $sav = Get-ChildItem "$env:LOCALAPPDATA" -Recurse -Filter 'settings.sav' -Depth 4 -EA SilentlyContinue |
-           Select-Object -First 1
+    if ($SettingsSave) { $sav = Get-Item -LiteralPath $SettingsSave }
+    else {
+        # Never take the first other game's save from LocalAppData.
+        $inner = Split-Path (Split-Path (Split-Path $wc -Parent) -Parent) -Parent | Split-Path -Leaf
+        $candidates = @(Get-ChildItem "$env:LOCALAPPDATA" -Directory -EA SilentlyContinue |
+            Where-Object { ($_.Name -replace '[^a-z0-9]', '') -eq ($inner -replace '[^a-z0-9]', '') } |
+            ForEach-Object { Get-ChildItem $_.FullName -Recurse -Filter 'settings.sav' -Depth 4 -EA SilentlyContinue })
+        $sav = if ($candidates.Count -eq 1) { $candidates[0] } else { $null }
+    }
     if (-not $sav) { return @{} }
     $b = [IO.File]::ReadAllBytes($sav.FullName)
-    if ([Text.Encoding]::ASCII.GetString($b, 0, 4) -ne 'GVAS') { return @{} }
+    if ($b.Length -lt 4 -or [Text.Encoding]::ASCII.GetString($b, 0, 4) -ne 'GVAS') { return @{} }
 
     # Walk UE4 tagged properties: FString name, FString type, int64 size, u8 guid, payload
     $map = @{}
@@ -119,7 +155,7 @@ function Get-ActionSlots {
         if ($n -gt 0 -and $n -lt 512 -and $o.Value + $n -le $buf.Length) {
             $s = [Text.Encoding]::ASCII.GetString($buf, $o.Value, $n - 1); $o.Value += $n; return $s
         }
-        if ($n -lt 0 -and $n -gt -512) {
+        if ($n -lt 0 -and $n -gt -512 -and $o.Value + (-$n * 2) -le $buf.Length) {
             $n = -$n
             $s = [Text.Encoding]::Unicode.GetString($buf, $o.Value, ($n - 1) * 2); $o.Value += $n * 2; return $s
         }
@@ -135,7 +171,9 @@ function Get-ActionSlots {
         if ($name -eq 'None') { continue }
         $type = ReadStr $b ([ref]$o)
         if (-not $type -or $type -notlike '*Property') { $o = $save + 1; continue }
+        if ($o + 9 -gt $b.Length) { break }
         $size = [BitConverter]::ToInt64($b, $o); $o += 9        # int64 size + guid flag
+        if ($size -lt 0 -or $size -gt ($b.Length - $o)) { $o = $save + 1; continue }
         if ($name -eq 'ActionName') { $p = $o; $action = ReadStr $b ([ref]$p) }
         elseif ($name -eq 'KeyName' -and $action) {
             $p = $o; $key = ReadStr $b ([ref]$p)
@@ -152,17 +190,18 @@ function Get-ActionSlots {
 Head "Reading the game's action list"
 $actionSlot = Get-ActionSlots
 if ($actionSlot.Count) { Ok "$($actionSlot.Count) actions have a wheel binding" }
-else { Warn "settings.sav not read - falling back to Gravel's known layout" }
+else { Warn "Saved button layout unavailable. Only Gravel's verified default actions can be offered." }
+$isGravel = $wc -match '(?i)[\\/]gravel[\\/]'
 
 # Gravel's defaults, verified by dumping settings.sav. Used when the save cannot
 # be read, and to give friendly names to the actions worth binding.
 $FRIENDLY = [ordered]@{
     'Gear up'          = @('GearUp',         'Wheel_RightShoulder')
     'Gear down'        = @('GearDown',       'Wheel_LeftShoulder')
-    'Handbrake'        = @('Handbrake',      'Wheel_RightTrigger')
+    'Handbrake (button)' = @('Handbrake',    'Wheel_RightTrigger')
     'Rewind'           = @('RewindActivate', 'Wheel_LeftTrigger')
     'Change camera'    = @('SwitchCamera',   'Wheel_Special_Left')
-    'Pause / start'    = @('Pause',          'Wheel_Special_Right')
+    'Pause'            = @('Pause',          'Wheel_Special_Right')
     'Confirm'          = @('Confirm',        'Wheel_FaceButton_Bottom')
     'Back'             = @('Back',           'Wheel_FaceButton_Right')
     'Respawn'          = @('Respawn',        'Wheel_FaceButton_Top')
@@ -179,152 +218,251 @@ foreach ($line in (& $probe DEVICES)) {
 }
 if (-not $devs) { Die "No DirectInput controllers attached." }
 if ($Product) { $dev = $devs | Where-Object Key -eq $Product.ToLower() | Select-Object -First 1 }
+if ($Product -and -not $dev) { Die "The selected device is not connected. Reconnect it or choose a device explicitly." }
 if (-not $dev) {
     if ($devs.Count -eq 1) { $dev = $devs[0] }
     else {
-        for ($i = 0; $i -lt $devs.Count; $i++) { Say "    [$($i+1)] $($devs[$i].Name)  ($($devs[$i].Key), $($devs[$i].Type))" }
-        $dev = $devs[[int](Read-Host "  Which device? (1-$($devs.Count))") - 1]
+        for ($i = 0; $i -lt $devs.Count; $i++) { Say "    [$($i+1)] $($devs[$i].Name)" }
+        $choice = Pick-Number '  Choose a device' $devs.Count
+        if ($choice -lt 0) { return }
+        $dev = $devs[$choice]
     }
 }
 if (-not $dev) { Die "invalid choice" }
-Ok "$($dev.Name)  key=$($dev.Key)"
+if (@($devs | Where-Object Key -eq $dev.Key).Count -gt 1) { Die 'Two connected devices share the same product identity. Disconnect the duplicate before setup.' }
+Ok $dev.Name
 
 # ------------------------------------------------------------------ helpers
-function Sample($seconds) { & $probe $dev.Key $seconds }
-
-function Read-Button($prompt, $seconds = 6) {
-    Say "  $prompt" 'Yellow'
-    Say "    (waiting $seconds seconds...)" 'DarkGray'
-    $btn = $null
-    foreach ($l in (Sample $seconds)) { if ($l -match '^BTN (\d+)$' -and -not $btn) { $btn = [int]$Matches[1] } }
-    if ($btn) { Ok "button $btn" } else { Warn "nothing pressed" }
-    $btn
+function Sample([int]$Seconds) {
+    # This helper only reads input; cancelling it cannot leave an FFB effect.
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = $probe
+    $info.Arguments = "$($dev.Key) $Seconds"
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = [Diagnostics.Process]::Start($info)
+    $errors = $process.StandardError.ReadToEndAsync()
+    try {
+        $pending = $process.StandardOutput.ReadLineAsync()
+        while ($true) {
+            $cancel = $false
+            try { if ([Console]::KeyAvailable) { $cancel = [Console]::ReadKey($true).Key -eq 'Escape' } } catch { }
+            if ($cancel) { throw [OperationCanceledException]::new('Cancelled. The previous assignment was kept.') }
+            if (-not $pending.Wait(50)) { continue }
+            $line = $pending.Result
+            if ($null -eq $line) { break }
+            if ($line -like 'ERR *') { throw $line.Substring(4) }
+            $line
+            $pending = $process.StandardOutput.ReadLineAsync()
+        }
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) { throw "Input reader stopped. Reconnect the device and try again. $($errors.Result)" }
+    } finally {
+        if (-not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
+        $process.Dispose()
+    }
 }
 
-$AXIS_NAMES = 'Axis1', 'Axis2', 'Axis3', 'Axis4', 'Axis5', 'Axis6', 'Axis7', 'Axis8'
-function Read-Axis($prompt, $seconds = 6) {
-    Say "  $prompt" 'Yellow'
-    Say "    (waiting $seconds seconds...)" 'DarkGray'
-    $min = @(); $max = @(); $first = $null
-    foreach ($l in (Sample $seconds)) {
-        if ($l -notmatch '^AX ') { continue }
-        $v = $l.Substring(3) -split ' ' | ForEach-Object { [int]$_ }
-        # the very first sample is DirectInput's pre-poll default of all 32767
-        if (-not $first) { $first = $v; continue }
-        if (-not $min.Count) { $min = $v.Clone(); $max = $v.Clone(); continue }
-        for ($i = 0; $i -lt 8; $i++) {
-            if ($v[$i] -lt $min[$i]) { $min[$i] = $v[$i] }
-            if ($v[$i] -gt $max[$i]) { $max[$i] = $v[$i] }
-        }
-    }
-    if (-not $min.Count) { Warn "no data"; return $null }
-    $best = -1; $travel = 0
-    for ($i = 0; $i -lt 8; $i++) { if (($max[$i] - $min[$i]) -gt $travel) { $travel = $max[$i] - $min[$i]; $best = $i } }
-    if ($travel -lt 3000) { Warn "no movement detected"; return $null }
-    # idles low -> &1.0&0.0 ; idles high -> &-1.0&1.0
-    $restLow = ($min[$best] -lt (($max[$best] + $min[$best]) / 2))
-    $pol = if ($restLow) { '1.0&0.0' } else { '-1.0&1.0' }
-    Ok "$($AXIS_NAMES[$best])  range $($min[$best])..$($max[$best])  idles $(if($restLow){'low'}else{'high'})"
-    [pscustomobject]@{ Axis = $AXIS_NAMES[$best]; Polarity = $pol }
+$AXES = [ordered]@{
+    'Steering' = 'Wheel_Steer'
+    'Throttle' = 'Wheel_Accelerator'
+    'Brake' = 'Wheel_Brake'
+    'Handbrake (axis)' = 'Wheel_Handbrake'
+    'Clutch' = 'Wheel_Clutch'
 }
 
 # ------------------------------------------------- WheelConfig read / write
-$nl = "`r`n"
 $raw = [IO.File]::ReadAllText($wc)
-if ($raw -notmatch "\r\n") { Die "WheelConfig.ini is not CRLF - refusing to guess line endings" }
+$original = $raw
+if ($raw -notmatch "\r\n") { Die 'WheelConfig.ini is not CRLF. Restore its backup before setup.' }
 $section = "[/Wheel.Config/$($dev.Key)]"
-if ($raw -notmatch [regex]::Escape($section)) {
-    Warn "this device has no section yet - it will be created from a shipped one"
-    $tpl = [regex]::Match($raw, '\[/Wheel\.Config/c262046d\].*?(?=\r\n\[/Wheel\.Config/|\Z)', 'Singleline')
+if (-not (Get-WheelBlock $raw $dev.Key).Success) {
+    Warn 'A profile will be created when you choose Save and exit.'
+    $tpl = Get-WheelBlock $raw 'c262046d'
     if (-not $tpl.Success) { $tpl = [regex]::Match($raw, '\[/Wheel\.Config/\w+\].*?(?=\r\n\[/Wheel\.Config/|\Z)', 'Singleline') }
+    if (-not $tpl.Success) { Die 'No supported wheel template found. Restore the game file before setup.' }
     $block = $tpl.Value -replace '^\[/Wheel\.Config/\w+\]', $section
-    $block = $block -replace '(?m)^(Wheel_\w+)=Button\d+', '$1='          # start clean
-    $block = $block -replace '(?m)^ProductName=.*', "ProductName=$($dev.Name)"
-    $raw = $raw.TrimEnd("`r", "`n") + $nl + $nl + $block.TrimEnd("`r", "`n") + $nl
+    # A new profile must not inherit another wheel's unverified axis/button bindings.
+    $block = $block -replace '(?m)^(Wheel_\w+)=[^\r\n]*', '$1='
+    $block = [regex]::Replace($block, '(?m)^ProductName=[^\r\n]*', { "ProductName=$($dev.Name)" })
+    $raw = $raw.TrimEnd("`r", "`n") + "`r`n`r`n" + $block.TrimEnd("`r", "`n") + "`r`n"
 }
 
-function Set-Field($key, $value) {
-    $script:raw = [regex]::Replace($script:raw,
-        "(?s)(\[/Wheel\.Config/$($dev.Key)\].*?)(?=\r\n\[/Wheel\.Config/|\Z)",
-        {
-            param($m)
-            # [^\r\n]* stops before the CR so the file's CRLF endings survive
-            [regex]::Replace($m.Groups[1].Value, "(?m)^$([regex]::Escape($key))=[^\r\n]*", "$key=$value")
-        }, 1)
-}
-function Get-Field($key) {
-    $m = [regex]::Match($raw, "(?s)\[/Wheel\.Config/$($dev.Key)\].*?(?=\r\n\[/Wheel\.Config/|\Z)")
-    $f = [regex]::Match($m.Value, "(?m)^$([regex]::Escape($key))=([^\r\n]*)")
-    if ($f.Success) { $f.Groups[1].Value } else { '' }
+function Set-Field($Key, $Value) { $script:raw = Set-WheelField $script:raw $dev.Key $Key $Value }
+function Get-Field($Key) { Get-WheelField $script:raw $dev.Key $Key }
+function Assignment($Value) { Format-WheelAssignment $Value -Advanced:($View -eq 'Advanced') }
+function Resolve-Slot($Name) {
+    $action, $fallback = $FRIENDLY[$Name]
+    if ($actionSlot.ContainsKey($action)) { return $actionSlot[$action] }
+    if ($isGravel) { return $fallback }
+    return $null
 }
 
-# ------------------------------------------------------------------- menu
-$dirty = $false
-while ($true) {
-    Head "What would you like to do?"
-    Say "    [1] Calibrate pedals   (measures which axis is which)"
-    Say "    [2] Bind a control     (press the button you want to use)"
-    Say "    [3] Show current mapping"
-    Say "    [4] Save and exit"
-    Say "    [5] Exit without saving"
-    switch (Read-Host "  Choose") {
-        '1' {
-            Head "Pedal calibration"
-            Say "  Work each pedal through its FULL travel when prompted." 'Gray'
-            foreach ($p in @(
-                @{ Field = 'Wheel_Steer';       Prompt = 'Turn the wheel fully left, then fully right' }
-                @{ Field = 'Wheel_Accelerator'; Prompt = 'Press the THROTTLE fully, then release' }
-                @{ Field = 'Wheel_Brake';       Prompt = 'Press the BRAKE fully, then release' }
-                @{ Field = 'Wheel_Clutch';      Prompt = 'Press the CLUTCH fully (skip if none - just wait)' }
-                @{ Field = 'Wheel_Handbrake';   Prompt = 'Pull the HANDBRAKE fully (skip if none - just wait)' }
-            )) {
-                $r = Read-Axis $p.Prompt
-                if ($r) {
-                    # steering is bidirectional and always uses the plain mapping
-                    $v = if ($p.Field -eq 'Wheel_Steer') { "$($r.Axis)&1.0&0.0" } else { "$($r.Axis)&$($r.Polarity)" }
-                    Set-Field $p.Field $v
-                    $dirty = $true
-                }
-            }
+function Edit-Axis([string]$Name) {
+    $field = $AXES[$Name]
+    Head "$Name - $(Assignment (Get-Field $field))"
+    $choice = Read-Host '  [B] Bind / calibrate  [C] Clear  [Enter] Cancel'
+    if ($choice -eq 'c') {
+        if ((Read-Host "  Clear $Name? Type Clear, or Enter to cancel") -eq 'Clear') { Set-Field $field '' }
+        return
+    }
+    if ($choice -ne 'b') { return }
+    try {
+        Say '  Finish or cancel this calibration before changing view.' 'DarkGray'
+        Say '  Keep other controls still. Esc cancels input capture.'
+        if ($Name -eq 'Steering') { $prompt = 'Centre the wheel' }
+        else { $prompt = 'Release this pedal or handbrake' }
+        if ((Read-Host "  $prompt. Enter to measure rest, or C to cancel") -eq 'c') { return }
+        $rest = @(Sample 2)
+        $prompt = if ($Name -eq 'Steering') { 'Turn fully left, then fully right' } else { 'Press or pull fully, hold briefly, then release' }
+        if ((Read-Host "  $prompt during the next 6 seconds. Enter to begin, or C to cancel") -eq 'c') { return }
+        $travel = @(Sample 6)
+        $mapping = Find-AxisMapping $rest $travel -Steering:($Name -eq 'Steering')
+        Say "  Detected: $(Assignment $mapping.Value)"
+        Say '  This sets the axis and its direction. Finish endpoint/deadzone calibration in the game.'
+        if ($View -eq 'Advanced') { Say "  Raw rest: $($mapping.Rest); full: $($mapping.Full)" }
+        $choice = Read-Host '  [S] Save calibration  [I] Invert direction  [Enter] Cancel'
+        if ($choice -eq 'i') {
+            $mapping.Inverted = -not $mapping.Inverted
+            $polarity = if ($mapping.Inverted) { '-1.0&1.0' } else { '1.0&0.0' }
+            $mapping.Value = "Axis$($mapping.Axis + 1)&$polarity"
+            $choice = Read-Host "  $(Assignment $mapping.Value). [S] Save calibration  [Enter] Cancel"
         }
-        '2' {
-            Head "Bind a control"
-            $names = @($FRIENDLY.Keys)
-            for ($i = 0; $i -lt $names.Count; $i++) {
-                $act, $fallback = $FRIENDLY[$names[$i]]
-                $slot = if ($actionSlot.ContainsKey($act)) { $actionSlot[$act] } else { $fallback }
-                $cur = Get-Field $slot
-                Say ("    [{0}] {1,-16} -> {2,-26} {3}" -f ($i + 1), $names[$i], $slot, $(if ($cur) { "(now $cur)" } else { '' }))
-            }
-            $pick = [int](Read-Host "  Which control? (1-$($names.Count))") - 1
-            if ($pick -lt 0 -or $pick -ge $names.Count) { Warn "invalid"; break }
-            $act, $fallback = $FRIENDLY[$names[$pick]]
-            $slot = if ($actionSlot.ContainsKey($act)) { $actionSlot[$act] } else { $fallback }
-            $btn = Read-Button "Press the button you want for '$($names[$pick])'"
-            if ($btn) {
-                Set-Field $slot "Button$btn"
-                Ok "$($names[$pick]) -> $slot = Button$btn"
-                $dirty = $true
-            }
-        }
-        '3' {
-            Head "Current mapping for $($dev.Name)"
-            $m = [regex]::Match($raw, "(?s)\[/Wheel\.Config/$($dev.Key)\].*?(?=\r\n\[/Wheel\.Config/|\Z)")
-            foreach ($l in ($m.Value -split "`r`n")) {
-                if ($l -match '^\w[\w_]*=(.+)$') { Say "    $l" }
-            }
-        }
-        '4' {
-            if ($dirty) {
-                Copy-Item $wc "$wc.bak" -Force
-                [IO.File]::WriteAllText($wc, $raw)
-                $bare = ([regex]::Matches($raw, "(?<!\r)\n")).Count
-                Ok "saved (backup: WheelConfig.ini.bak, bare LF: $bare)"
-                Say "`n  Now run the game's wheel calibration once." 'Green'
-            } else { Say "  nothing changed" }
+        if ($choice -eq 's') { Set-Field $field $mapping.Value; Ok "$Name ready to save" }
+        else { Say '  Cancelled. The previous assignment was kept.' }
+    } catch { Warn $_.Exception.Message }
+}
+
+function Edit-Button([string]$Name) {
+    $slot = Resolve-Slot $Name
+    if (-not $slot) { Warn 'No verified action mapping. Start the game once, close it, then reopen setup with its settings save.'; return }
+    Head "$Name - $(Assignment (Get-Field $slot))"
+    try {
+        $choice = Read-Host '  [B] Bind  [C] Clear  [Enter] Cancel'
+        if ($choice -eq 'c') {
+            if ((Read-Host "  Clear $Name? Type Clear, or Enter to cancel") -eq 'Clear') { Set-Field $slot '' }
             return
         }
-        '5' { Say "  discarded"; return }
-        default { Warn "pick 1-5" }
+        if ($choice -ne 'b') { return }
+        Say '  Release the button first, then press it during the next 6 seconds. Esc cancels.'
+        $captured = @(Sample 6 | Where-Object { $_ -match '^BTN \d+$' })
+        if (-not $captured.Count) { Warn 'No button pressed. The previous assignment was kept.'; return }
+        $button = [int]($captured[0].Substring(4))
+        $shared = @($FRIENDLY.Keys | Where-Object { $_ -ne $Name -and (Resolve-Slot $_) -eq $slot })
+        if ($shared.Count) { Warn "The game shares this assignment with: $($shared -join ', ')." }
+        $other = @($FRIENDLY.Keys | Where-Object { $_ -ne $Name -and (Resolve-Slot $_) -and (Get-Field (Resolve-Slot $_)) -eq "Button$button" })
+        if ($other.Count) { Warn "Button $button also triggers: $($other -join ', ')." }
+        if ((Read-Host "  Button $button. [S] Save binding  [Enter] Cancel") -eq 's') {
+            Set-Field $slot "Button$button"
+            Ok "$Name ready to save"
+        } else { Say '  Cancelled. The previous assignment was kept.' }
+    } catch { Warn $_.Exception.Message }
+}
+
+$page = 'Setup'
+while ($true) {
+    Head "Wheel settings - $page"
+    Say "  View: $(if ($View -eq 'Simple') { '[Simple] Advanced' } else { 'Simple [Advanced]' })    Device: $($dev.Name)"
+    Say '  [1] Setup  [2] Controls  [3] FFB  [4] Cameras  [5] Telemetry  [6] Help'
+    if ($raw -cne $original) { Say '  Changes pending - Save and exit to apply them.' 'Yellow' }
+    switch ($page) {
+        'Setup' {
+            $missing = @('Steering','Throttle','Brake' | Where-Object { -not (Get-Field $AXES[$_]) })
+            if ($missing.Count) { Say "  Next: Bind $($missing[0]). [B] Begin" }
+            else { Say '  Main axes assigned. Run the game wheel calibration once, then drive.' }
+            Say '  [2] Controls for optional handbrake, clutch and buttons.'
+            Say '  Settings are applied when saved. The game must stay closed.'
+        }
+        'Controls' {
+            $names = @($AXES.Keys)
+            for ($i = 0; $i -lt 4; $i++) { Say "  [A$($i+1)] $($names[$i]): $(Assignment (Get-Field $AXES[$names[$i]]))" }
+            Say '  [B] Driving and menu buttons  [C] Clutch'
+            Say '  Handbrake axis and button assignments are independent; final combination is controlled by the game.'
+            if ($View -eq 'Advanced') { Say '  [R] Raw mapping details' }
+        }
+        'FFB' {
+            Say '  Force feedback is provided by the game. Choose its wheel and Strength in the game settings.'
+            Say '  This setup tool reads input only. It cannot enable, stop or test game force feedback.'
+            if ($View -eq 'Advanced') { Say "  Profile force scale: $(Get-Field 'ForceFeedback'); rotation: $(Get-Field 'MaxRotationAngle') degrees" }
+        }
+        'Cameras' {
+            Say "  Change camera: $(Assignment (Get-Field (Resolve-Slot 'Change camera')))"
+            Say '  [B] Bind Change camera'
+            Say '  The game provides the camera cycle. This mod adds no Bonnet/Bumper mounts or adjustment shortcuts.'
+        }
+        'Telemetry' {
+            Say '  Optional: SimHub receives telemetry while the game runs.'
+            Say '  Match the receiver and port shown by Install.bat. No live connection can be checked from setup.'
+            Say '  Existing telemetry settings are preserved by this tool.'
+            if ($View -eq 'Advanced') {
+                Say '  Edit milestone_mod.ini beside the game executable for destination, packet format and rate.'
+                Say '  See docs\forza-format.md and docs\troubleshooting.md for channel and diagnostic details.'
+            }
+        }
+        'Help' {
+            Say '  Close the game before setup. Select an axis to bind/calibrate; Save and exit writes a backup.'
+            Say '  No movement? Reconnect the device and reopen setup. Wrong direction? Recalibrate that axis.'
+            Say '  Gravel is hardware-verified. Other Milestone games still need validation.'
+            Say '  The tool uses the terminal text size. Ctrl+C exits without saving pending mappings.'
+            Say '  F6 is not available in this mod. Reopen WheelSetup.bat to change controls.'
+            if ($View -eq 'Advanced') { Say "  Device key: $($dev.Key) ($($dev.Type))"; Say "  Mapping file: $wc"; Say "  View preference: $PreferencesPath" }
+        }
+    }
+    Say '  [V] Choose view  [S] Save and exit  [X] Exit without saving'
+    $command = Read-Host '  Choose'
+    if ($command -match '^[1-6]$') { $page = @('Setup','Controls','FFB','Cameras','Telemetry','Help')[[int]$command - 1]; continue }
+    switch ($command) {
+        'v' {
+            $choice = Read-Host '  View: [1] Simple  [2] Advanced  [Enter] Cancel'
+            $next = if ($choice -eq '1') { 'Simple' } elseif ($choice -eq '2') { 'Advanced' } else { $null }
+            if ($next) {
+                try { Save-SettingsView $PreferencesPath $next; $View = $next }
+                catch { Warn "Could not save the view. $($_.Exception.Message)" }
+            }
+        }
+        'b' {
+            if ($page -eq 'Setup' -and $missing.Count) { Edit-Axis $missing[0] }
+            elseif ($page -eq 'Cameras') { Edit-Button 'Change camera' }
+            elseif ($page -eq 'Controls') {
+                $names = @($FRIENDLY.Keys)
+                for ($i = 0; $i -lt $names.Count; $i++) {
+                    $slot = Resolve-Slot $names[$i]
+                    $value = if ($slot) { Assignment (Get-Field $slot) } else { 'Unavailable - saved layout needed' }
+                    Say "  [$($i+1)] $($names[$i]): $value"
+                }
+                $choice = Pick-Number '  Choose a button action' $names.Count
+                if ($choice -ge 0) { Edit-Button $names[$choice] }
+            }
+        }
+        'c' { if ($page -eq 'Controls') { Edit-Axis 'Clutch' } }
+        { $_ -match '^a([1-4])$' } {
+            if ($page -eq 'Controls') {
+                $axisChoice = [int]$command.Substring(1) - 1
+                Edit-Axis (@($AXES.Keys)[$axisChoice])
+            }
+        }
+        'r' {
+            if ($page -eq 'Controls' -and $View -eq 'Advanced') {
+                Head 'Raw mapping details'
+                Say (Get-WheelBlock $raw $dev.Key).Value
+                Read-Host '  Enter to return' | Out-Null
+            }
+        }
+        's' {
+            try {
+                if ($raw -cne $original) {
+                    $running = Get-Process -EA SilentlyContinue | Where-Object { $_.Path -and $gameDir -and $_.Path.StartsWith($gameDir, [StringComparison]::OrdinalIgnoreCase) }
+                    if ($running) { throw 'The game is running. Close it before saving.' }
+                    $backup = Save-WheelConfig $wc $original $raw
+                    Ok "Saved. Backup: $backup"
+                    Say '  Now run the game wheel calibration once.'
+                } else { Say '  No mappings changed.' }
+                return
+            } catch { Warn "Save failed. Your previous mappings are still on disk. $($_.Exception.Message)" }
+        }
+        'x' { Say '  Pending mappings discarded. Your explicit view choice is remembered.'; return }
+        default { Warn 'Choose a listed action.' }
     }
 }
