@@ -19,15 +19,24 @@ game; the other Milestone titles below are still unverified candidates.**
 
 Close the game, run **Install.bat**, then open **WheelSetup.bat**. Setup opens in
 **Simple**: bind Steering, Throttle and Brake, add any handbrake or buttons you
-use, then **Save and exit**. Run the game's own wheel calibration once and drive.
-Telemetry is optional; the installer prints the receiver and port to use.
+use, then **Save mappings and exit**. Run the game's own wheel calibration once and drive.
+Telemetry is optional. **Simple → Telemetry** shows the saved Off/On choice,
+receiver and destination. Match those receiver settings in SimHub. Off/On saves
+for the next game launch; this external tool does not control a running sender.
 
 The six pages are **Setup, Controls, FFB, Cameras, Telemetry, Help**. Use
 **View: Simple / Advanced** to reveal raw mappings and technical details. The
 choice is remembered; switching views changes no bindings, tune or telemetry.
+If a damaged view preference is reported, explicitly select Simple or Advanced
+to repair it; the previous file is backed up and its location is shown.
 Button numbers start at 1. Each axis has its own bind/calibration flow, so an
 optional clutch or handbrake never holds up basic setup. Cancel keeps the
-previous assignment; the final Save and exit writes the pending mappings.
+previous assignment; the final Save mappings and exit writes the pending mappings.
+For a custom receiver, select **Telemetry → Connection settings (Advanced)**,
+edit the receiver IPv4 address, port and format, then **Apply connection** or
+**Cancel**. Connection changes save together and keep Telemetry Off/On unchanged.
+Applied telemetry settings are already saved even if you discard pending wheel
+mappings when leaving setup.
 
 **This is an external setup tool, not an F6 game panel.** The game still owns
 FFB, camera views, final endpoint/deadzone calibration and input combination.
@@ -160,19 +169,26 @@ Reading all 128 buttons needs `c_dfDIJoystick2`, which is why
 `tools/wheelprobe` is a small native helper rather than pure PowerShell.
 
 Run the game's wheel calibration once afterwards. Changes are staged until
-Save and exit. A failed save leaves the old file intact, and each successful
+Save mappings and exit. A failed save leaves the old file intact, and each successful
 save creates a dated backup. If the file changes while setup is open, reopen
 setup before saving so another tool's changes are not overwritten.
 
 ## Setting up SimHub
 
 Pick a Forza game in SimHub, note the UDP port it shows, and match both in
-`milestone_mod.ini`:
+**WheelSetup.bat → Telemetry → Connection settings (Advanced)**. Use `127.0.0.1`
+for a receiver on this PC. This mod's sender supports IPv4 addresses only,
+not hostnames or IPv6. Configuration is read once when the game launches.
 
 | SimHub game | `format=` | bytes |
 |---|---|---|
 | Forza Horizon 4 / **Horizon 5** | `fh4` | 324 |
 | Forza Motorsport 7 | `fm7` | 311 |
+
+The external tool shows saved configuration, not delivery or receiver
+acknowledgment. Advanced also offers the original 232-byte Sled format for a
+compatible physics-only receiver. Rate, mirror output and channel mappings
+remain advanced `milestone_mod.ini` settings; ordinary setup preserves them.
 
 **The length must match the game you picked.** A mismatch fails silently — no
 error, the dash simply stays dead. SimHub's own log (`SimHub\Logs\SimHub.txt`)

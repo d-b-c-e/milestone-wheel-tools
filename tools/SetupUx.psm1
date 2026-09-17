@@ -13,8 +13,17 @@ function Get-SettingsView([string]$Path) {
 
 function Save-SettingsView([string]$Path, [ValidateSet('Simple','Advanced')][string]$View) {
     $state = [pscustomobject]@{}
-    if (Test-Path -LiteralPath $Path) { $state = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json }
-    if ($null -eq $state -or $state -isnot [pscustomobject]) { throw 'Settings view must be a JSON object. The previous file was kept.' }
+    $previousText = $null
+    $repair = $false
+    if (Test-Path -LiteralPath $Path) {
+        # Only an explicit view selection reaches this function. A read failure
+        # is not permission to repair; malformed JSON is, with its bytes backed up.
+        $previousText = [IO.File]::ReadAllText($Path)
+        try { $state = $previousText | ConvertFrom-Json }
+        catch { $repair = $true }
+        if ($null -eq $state -or $state -isnot [pscustomobject]) { $repair = $true }
+        if ($repair) { $state = [pscustomobject]@{} }
+    }
     $state | Add-Member -NotePropertyName View -NotePropertyValue $View -Force
     $folder = Split-Path $Path -Parent
     [IO.Directory]::CreateDirectory($folder) | Out-Null
@@ -22,9 +31,12 @@ function Save-SettingsView([string]$Path, [ValidateSet('Simple','Advanced')][str
     try {
         [IO.File]::WriteAllText($temp, ($state | ConvertTo-Json -Depth 16))
         if (Test-Path -LiteralPath $Path) {
+            if ([IO.File]::ReadAllText($Path) -cne $previousText) { throw 'The view preference changed in another setup window. Choose the view again.' }
             # Windows PowerShell 5.1 marshals a null backup path as an invalid empty string.
-            [IO.File]::Replace($temp, $Path, "$temp.previous")
-            Remove-Item -LiteralPath "$temp.previous"
+            $backup = if ($repair) { "$Path.invalid-$(Get-Date -Format 'yyyyMMdd-HHmmss')-$([guid]::NewGuid().ToString('N').Substring(0,6)).bak" } else { "$temp.previous" }
+            [IO.File]::Replace($temp, $Path, $backup)
+            if ($repair) { Write-Warning "View preference repaired. Previous file kept at: $backup. Game settings were not changed." }
+            else { Remove-Item -LiteralPath $backup }
         }
         else { [IO.File]::Move($temp, $Path) }
     } finally { if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp } }
@@ -124,4 +136,86 @@ function Set-ModSetting([string]$Text, [string]$Section, [string]$Key, [string]$
     return $Text.Remove($block.Index, $block.Length).Insert($block.Index, $updated)
 }
 
-Export-ModuleMember -Function Get-SettingsView,Save-SettingsView,Get-WheelBlock,Get-WheelField,Set-WheelField,Format-WheelAssignment,Get-AxisSamples,Find-AxisMapping,Save-WheelConfig,Get-ModSetting,Set-ModSetting
+function Get-TelemetryBlock([string]$Text) {
+    $blocks = [regex]::Matches($Text, '(?ims)^[ \t]*\[telemetry\][ \t]*\r?\n.*?(?=^[ \t]*\[|\z)')
+    if ($blocks.Count -ne 1) { throw 'The settings need one [telemetry] section. Restore a known working configuration before editing.' }
+    return $blocks[0]
+}
+
+function Get-TelemetryState([string]$Text) {
+    $block = Get-TelemetryBlock $Text
+    $values = @{}
+    foreach ($key in 'enabled','host','port','format') {
+        $fields = [regex]::Matches($block.Value, '(?im)^[ \t]*' + $key + '[ \t]*=([^\r\n]*)')
+        if ($fields.Count -ne 1) { throw "Telemetry needs exactly one $key setting. Restore a known working configuration before editing." }
+        $values[$key] = $fields[0].Groups[1].Value.Trim()
+    }
+    return [pscustomobject]$values
+}
+
+function Assert-TelemetryConnection([string]$Address, [string]$Port, [string]$Format) {
+    # The unchanged runtime uses inet_pton(AF_INET), with no hostname lookup.
+    if ($Address -notmatch '^\d{1,3}(\.\d{1,3}){3}$') { throw 'Use a dotted IPv4 address, such as 127.0.0.1 for this PC. Hostnames and IPv6 are not supported by this mod.' }
+    foreach ($part in ($Address -split '\.')) {
+        if ([int]$part -gt 255 -or ($part.Length -gt 1 -and $part.StartsWith('0'))) { throw 'The receiver IPv4 address is invalid. Use four numbers from 0 to 255 without leading zeros.' }
+    }
+    if ($Address -eq '0.0.0.0' -or $Address -eq '255.255.255.255' -or [int]($Address -split '\.')[0] -ge 224) { throw 'Choose the receiver PC address. Unspecified, multicast and broadcast destinations are not supported here.' }
+    $number = 0
+    if ($Port -notmatch '^\d+$' -or -not [int]::TryParse($Port, [ref]$number) -or $number -lt 1 -or $number -gt 65535) { throw 'Port must be a whole number from 1 to 65535, matching the receiver.' }
+    if ($Format -notin @('fh4','fm7','sled')) { throw 'Choose Forza Horizon 4/5, Forza Motorsport 7, or the Sled receiver format.' }
+}
+
+function Get-TelemetryReceiver([string]$Format) {
+    switch ($Format) {
+        'fh4' { return 'Forza Horizon 4 / 5 (324 bytes)' }
+        'fm7' { return 'Forza Motorsport 7 (311 bytes)' }
+        'sled' { return 'Forza Sled (232 bytes; physics only)' }
+        default { return "Unrecognized saved format: $Format" }
+    }
+}
+
+function Get-TelemetryConnectionSummary($State) {
+    try { Assert-TelemetryConnection $State.host $State.port $State.format }
+    catch { return 'Connection needs review in Advanced; saved values were kept.' }
+    if ($State.host -eq '127.0.0.1' -and $State.port -eq '5300') {
+        if ($State.format -eq 'fh4') { return 'Matches the fresh-installer connection preset.' }
+        if ($State.format -eq 'fm7') { return 'Matches the shipped Gravel connection preset.' }
+    }
+    return 'Custom connection active. Review in Advanced.'
+}
+
+function Set-TelemetryFields([string]$Text, [hashtable]$Changes) {
+    $state = Get-TelemetryState $Text
+    foreach ($key in $Changes.Keys) {
+        if ($key -notin @('enabled','host','port','format')) { throw "Telemetry edit cannot change $key." }
+        if ([string]$Changes[$key] -match '[\r\n]') { throw 'A telemetry value must fit on one line.' }
+    }
+    if ($Changes.ContainsKey('enabled') -and [string]$Changes.enabled -notin @('0','1')) { throw 'Telemetry must be Off or On.' }
+    $connectionKeys = @($Changes.Keys | Where-Object { $_ -in @('host','port','format') })
+    if ($connectionKeys.Count -gt 0 -and $connectionKeys.Count -ne 3) { throw 'Apply the receiver address, port and format together.' }
+    if ($connectionKeys.Count) { Assert-TelemetryConnection $Changes.host $Changes.port $Changes.format }
+    elseif ($Changes.ContainsKey('enabled') -and [string]$Changes.enabled -eq '1') { Assert-TelemetryConnection $state.host $state.port $state.format }
+    foreach ($key in $Changes.Keys) {
+        $block = Get-TelemetryBlock $Text
+        $field = [regex]::Match($block.Value, '(?im)^([ \t]*' + $key + '[ \t]*=)([^\r\n]*)')
+        $updated = $block.Value.Remove($field.Index, $field.Length).Insert($field.Index, $field.Groups[1].Value + [string]$Changes[$key])
+        $Text = $Text.Remove($block.Index, $block.Length).Insert($block.Index, $updated)
+    }
+    return $Text
+}
+
+function Save-TelemetryConfig([string]$Path, [string]$Original, [string]$Text) {
+    if ($Text -ceq $Original) { return $null }
+    if ([IO.File]::ReadAllText($Path) -cne $Original) { throw 'Another tool changed the telemetry settings. Cancel and reopen the editor before applying.' }
+    $temp = Join-Path (Split-Path $Path -Parent) ('.telemetry-' + [guid]::NewGuid().ToString('N') + '.tmp')
+    $backup = "$Path.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')-$([guid]::NewGuid().ToString('N').Substring(0,6))"
+    try {
+        [IO.File]::WriteAllText($temp, $Text)
+        [IO.File]::Replace($temp, $Path, $backup)
+    } catch {
+        throw [IO.IOException]::new('Could not save telemetry. Close the game or other editor, then retry. The previous settings were kept.', $_.Exception)
+    } finally { if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp } }
+    return $backup
+}
+
+Export-ModuleMember -Function Get-SettingsView,Save-SettingsView,Get-WheelBlock,Get-WheelField,Set-WheelField,Format-WheelAssignment,Get-AxisSamples,Find-AxisMapping,Save-WheelConfig,Get-ModSetting,Set-ModSetting,Get-TelemetryState,Assert-TelemetryConnection,Get-TelemetryReceiver,Get-TelemetryConnectionSummary,Set-TelemetryFields,Save-TelemetryConfig

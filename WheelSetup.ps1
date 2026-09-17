@@ -36,6 +36,9 @@
 .PARAMETER PreferencesPath
     Optional presentation-preference location. Does not replace game configuration.
 
+.PARAMETER ModConfig
+    Exact installed milestone_mod.ini when the selected game's Win64 location differs.
+
 .EXAMPLE
     .\WheelSetup.ps1
 #>
@@ -44,6 +47,7 @@ param(
     [string]$GamePath,
     [string]$Product,
     [string]$SettingsSave,
+    [string]$ModConfig,
     [ValidateSet('Simple', 'Advanced')][string]$View,
     [string]$PreferencesPath = (Join-Path $env:LOCALAPPDATA 'DBCE\MilestoneWheelTools\settings-view.json')
 )
@@ -118,6 +122,8 @@ $gameDir = $wc
 while ($gameDir -and -not (Get-ChildItem $gameDir -Filter '*.exe' -EA SilentlyContinue)) { $gameDir = Split-Path $gameDir -Parent }
 $running = Get-Process -EA SilentlyContinue | Where-Object { $_.Path -and $gameDir -and $_.Path.StartsWith($gameDir, [StringComparison]::OrdinalIgnoreCase) }
 if ($running) { Die "$($running[0].ProcessName) is running - it rewrites WheelConfig.ini on exit. Close it first." }
+$innerGameFolder = Split-Path (Split-Path (Split-Path $wc -Parent) -Parent) -Parent
+$telemetryPath = if ($ModConfig) { [IO.Path]::GetFullPath($ModConfig) } else { Join-Path $innerGameFolder 'Binaries\Win64\milestone_mod.ini' }
 
 # ------------------------------------------------- action -> slot, from the save
 # settings.sav is a UE4 GVAS file whose ignitioninput block stores every binding
@@ -279,7 +285,7 @@ $original = $raw
 if ($raw -notmatch "\r\n") { Die 'WheelConfig.ini is not CRLF. Restore its backup before setup.' }
 $section = "[/Wheel.Config/$($dev.Key)]"
 if (-not (Get-WheelBlock $raw $dev.Key).Success) {
-    Warn 'A profile will be created when you choose Save and exit.'
+    Warn 'A profile will be created when you choose Save mappings and exit.'
     $tpl = Get-WheelBlock $raw 'c262046d'
     if (-not $tpl.Success) { $tpl = [regex]::Match($raw, '\[/Wheel\.Config/\w+\].*?(?=\r\n\[/Wheel\.Config/|\Z)', 'Singleline') }
     if (-not $tpl.Success) { Die 'No supported wheel template found. Restore the game file before setup.' }
@@ -361,12 +367,65 @@ function Edit-Button([string]$Name) {
     } catch { Warn $_.Exception.Message }
 }
 
+function Read-TelemetrySnapshot {
+    if (-not (Test-Path -LiteralPath $telemetryPath -PathType Leaf)) { throw 'Telemetry settings are not installed for this game. Run Install.bat, then reopen setup.' }
+    $text = [IO.File]::ReadAllText($telemetryPath)
+    [pscustomobject]@{ Text = $text; State = (Get-TelemetryState $text) }
+}
+
+function Write-TelemetryChange([string]$OriginalText, [string]$NewText) {
+    $configFolder = (Split-Path $telemetryPath -Parent).TrimEnd('\') + '\'
+    $selectedGameFolder = $innerGameFolder.TrimEnd('\') + '\'
+    $running = Get-Process -EA SilentlyContinue | Where-Object {
+        $_.Path -and ($_.Path.StartsWith($configFolder, [StringComparison]::OrdinalIgnoreCase) -or $_.Path.StartsWith($selectedGameFolder, [StringComparison]::OrdinalIgnoreCase))
+    }
+    if ($running) { throw 'Close the game before saving telemetry. Settings are read at the next game launch.' }
+    $backup = Save-TelemetryConfig $telemetryPath $OriginalText $NewText
+    if ($backup) { Ok 'Saved for the next game launch. Runtime delivery is unverified.' }
+    else { Say '  No connection values changed.' }
+}
+
+function Edit-TelemetryConnection {
+    try { $snapshot = Read-TelemetrySnapshot } catch { Warn $_.Exception.Message; return }
+    $draftAddress = $snapshot.State.host
+    $draftPort = $snapshot.State.port
+    $draftFormat = $snapshot.State.format
+    while ($true) {
+        Head 'Wheel settings - Telemetry - Connection settings'
+        Say '  View: Simple [Advanced]'
+        Say '  Draft only. Finish or cancel the current edit to change view.'
+        Say "  [H] Receiver address: $draftAddress (IPv4 only; 127.0.0.1 is this PC)"
+        Say "  [P] Port: $draftPort"
+        Say "  [F] Receiver: $(Get-TelemetryReceiver $draftFormat)"
+        Say '  Match the receiver game and UDP port in SimHub. Telemetry Off/On stays unchanged.'
+        Say '  [A] Apply connection  [C] Cancel'
+        switch (Read-Host '  Choose') {
+            'h' { $value = Read-Host '  Receiver IPv4 address (Enter keeps current draft)'; if ($value) { $draftAddress = $value.Trim() } }
+            'p' { $value = Read-Host '  Port 1-65535 (Enter keeps current draft)'; if ($value) { $draftPort = $value.Trim() } }
+            'f' {
+                Say '  [1] Forza Horizon 4 / 5  [2] Forza Motorsport 7  [3] Forza Sled (physics only)'
+                $choice = Pick-Number '  Choose the matching receiver format' 3
+                if ($choice -ge 0) { $draftFormat = @('fh4','fm7','sled')[$choice] }
+            }
+            'a' {
+                try {
+                    $candidate = Set-TelemetryFields $snapshot.Text @{ host = $draftAddress; port = $draftPort; format = $draftFormat }
+                    Write-TelemetryChange $snapshot.Text $candidate
+                    return
+                } catch { Warn "Connection was not applied. $($_.Exception.Message)" }
+            }
+            'c' { Say '  Cancelled. The saved connection was kept.'; return }
+            default { Warn 'Finish or cancel the current edit to change view.' }
+        }
+    }
+}
+
 $page = 'Setup'
 while ($true) {
     Head "Wheel settings - $page"
     Say "  View: $(if ($View -eq 'Simple') { '[Simple] Advanced' } else { 'Simple [Advanced]' })    Device: $($dev.Name)"
     Say '  [1] Setup  [2] Controls  [3] FFB  [4] Cameras  [5] Telemetry  [6] Help'
-    if ($raw -cne $original) { Say '  Changes pending - Save and exit to apply them.' 'Yellow' }
+    if ($raw -cne $original) { Say '  Changes pending - Save mappings and exit to apply them.' 'Yellow' }
     switch ($page) {
         'Setup' {
             $missing = @('Steering','Throttle','Brake' | Where-Object { -not (Get-Field $AXES[$_]) })
@@ -393,16 +452,24 @@ while ($true) {
             Say '  The game provides the camera cycle. This mod adds no Bonnet/Bumper mounts or adjustment shortcuts.'
         }
         'Telemetry' {
-            Say '  Optional: SimHub receives telemetry while the game runs.'
-            Say '  Match the receiver and port shown by Install.bat. No live connection can be checked from setup.'
-            Say '  Existing telemetry settings are preserved by this tool.'
-            if ($View -eq 'Advanced') {
-                Say '  Edit milestone_mod.ini beside the game executable for destination, packet format and rate.'
-                Say '  See docs\forza-format.md and docs\troubleshooting.md for channel and diagnostic details.'
-            }
+            try {
+                $telemetry = (Read-TelemetrySnapshot).State
+                $enabledLabel = if ($telemetry.enabled -eq '0') { '[Off] On' } elseif ($telemetry.enabled -eq '1') { 'Off [On]' } else { "Unrecognized saved value: $($telemetry.enabled)" }
+                Say "  Telemetry: $enabledLabel    [O] Off  [N] On"
+                Say "  Receiver: $(Get-TelemetryReceiver $telemetry.format)"
+                Say "  Destination: $($telemetry.host):$($telemetry.port)"
+                Say '  Saved configuration for the next game launch; runtime delivery unverified.'
+                Say "  $(Get-TelemetryConnectionSummary $telemetry)"
+                Say '  Match the receiver game and port in SimHub. Telemetry is optional.'
+                Say '  [A] Connection settings (Advanced)'
+                if ($View -eq 'Advanced') {
+                    Say "  Configuration file: $telemetryPath"
+                    Say '  Rate and channel diagnostics: docs\forza-format.md and docs\troubleshooting.md.'
+                }
+            } catch { Warn $_.Exception.Message; Say '  No telemetry setting has been changed.' }
         }
         'Help' {
-            Say '  Close the game before setup. Select an axis to bind/calibrate; Save and exit writes a backup.'
+            Say '  Close the game before setup. Select an axis to bind/calibrate; Save mappings and exit writes a backup.'
             Say '  No movement? Reconnect the device and reopen setup. Wrong direction? Recalibrate that axis.'
             Say '  Gravel is hardware-verified. Other Milestone games still need validation.'
             Say '  The tool uses the terminal text size. Ctrl+C exits without saving pending mappings.'
@@ -410,10 +477,28 @@ while ($true) {
             if ($View -eq 'Advanced') { Say "  Device key: $($dev.Key) ($($dev.Type))"; Say "  Mapping file: $wc"; Say "  View preference: $PreferencesPath" }
         }
     }
-    Say '  [V] Choose view  [S] Save and exit  [X] Exit without saving'
+    Say '  [V] Choose view  [S] Save mappings and exit  [X] Exit (discard pending mappings)'
     $command = Read-Host '  Choose'
     if ($command -match '^[1-6]$') { $page = @('Setup','Controls','FFB','Cameras','Telemetry','Help')[[int]$command - 1]; continue }
     switch ($command) {
+        { $_ -in @('o','n') } {
+            if ($page -eq 'Telemetry') {
+                try {
+                    $snapshot = Read-TelemetrySnapshot
+                    $value = if ($command -eq 'o') { '0' } else { '1' }
+                    $candidate = Set-TelemetryFields $snapshot.Text @{ enabled = $value }
+                    Write-TelemetryChange $snapshot.Text $candidate
+                } catch { Warn "Telemetry was not changed. $($_.Exception.Message)" }
+            }
+        }
+        'a' {
+            if ($page -eq 'Telemetry') {
+                try {
+                    if ($View -ne 'Advanced') { Save-SettingsView $PreferencesPath 'Advanced'; $View = 'Advanced' }
+                    Edit-TelemetryConnection
+                } catch { Warn $_.Exception.Message }
+            }
+        }
         'v' {
             $choice = Read-Host '  View: [1] Simple  [2] Advanced  [Enter] Cancel'
             $next = if ($choice -eq '1') { 'Simple' } elseif ($choice -eq '2') { 'Advanced' } else { $null }
@@ -462,7 +547,7 @@ while ($true) {
                 return
             } catch { Warn "Save failed. Your previous mappings are still on disk. $($_.Exception.Message)" }
         }
-        'x' { Say '  Pending mappings discarded. Your explicit view choice is remembered.'; return }
+        'x' { Say '  Pending mappings discarded. Saved telemetry and your explicit view choice are kept.'; return }
         default { Warn 'Choose a listed action.' }
     }
 }

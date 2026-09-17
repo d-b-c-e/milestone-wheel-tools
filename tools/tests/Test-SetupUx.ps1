@@ -36,7 +36,16 @@ try {
     Assert ((Get-SettingsView $preference) -eq 'Simple') 'A failed view save changed the previous choice.'
     [IO.File]::WriteAllText($preference, '{broken')
     Assert-Throws { Get-SettingsView $preference } 'Malformed preference needs a visible failure.'
-    Assert-Throws { Save-SettingsView $preference 'Advanced' } 'Malformed preference must not be silently overwritten.'
+    $invalidPreference = [IO.File]::ReadAllBytes($preference)
+    $lock = [IO.File]::Open($preference, 'Open', 'Read', [IO.FileShare]::ReadWrite)
+    try { Assert-Throws { Save-SettingsView $preference 'Advanced' } 'A denied preference repair must report failure.' }
+    finally { $lock.Dispose() }
+    Assert ([Convert]::ToBase64String([IO.File]::ReadAllBytes($preference)) -eq [Convert]::ToBase64String($invalidPreference)) 'A failed repair changed the invalid preference bytes.'
+    Save-SettingsView $preference 'Advanced'
+    Assert ((Get-SettingsView $preference) -eq 'Advanced') 'Explicit view selection must recover a malformed preference.'
+    $invalidBackup = @(Get-ChildItem $fixture -Filter 'settings-view.json.invalid-*.bak')
+    Assert ($invalidBackup.Count -eq 1) 'Successful repair must keep one reported invalid-file backup.'
+    Assert ([Convert]::ToBase64String([IO.File]::ReadAllBytes($invalidBackup[0].FullName)) -eq [Convert]::ToBase64String($invalidPreference)) 'Repair backup did not preserve the invalid bytes.'
     Remove-Item -LiteralPath $preference
     Assert-Throws { Save-SettingsView (Join-Path $preference 'child.json') 'Wrong' } 'Invalid view cannot be saved.'
 
@@ -123,6 +132,71 @@ class FixtureProbe {
     Run-Setup @('2','a4','b','','','s','s')
     Assert ((Get-WheelField ([IO.File]::ReadAllText($wc)) '0006346e' 'Wheel_Handbrake') -eq 'Axis3&-1.0&1.0') 'Accepted individual handbrake calibration was not saved.'
     Assert ((Get-WheelField ([IO.File]::ReadAllText($wc)) '0006346e' 'Wheel_RightTrigger') -eq 'Button9') 'Accepted handbrake axis removed its button.'
+
+    $telemetryFolder = Join-Path $fixture 'Gravel\gravel\Binaries\Win64'
+    [IO.Directory]::CreateDirectory($telemetryFolder) | Out-Null
+    $telemetryFile = Join-Path $telemetryFolder 'milestone_mod.ini'
+    $telemetryText = "[proxy]`r`nproduct=0006346e`r`n[telemetry]`r`nenabled=0`r`nhost=192.0.2.25`r`nport=9123`r`nformat=fm7`r`nrate=50`r`nowner_custom=keep this`r`n[ffb]`r`ngain=0.25`r`n"
+    [IO.File]::WriteAllText($telemetryFile, $telemetryText)
+    [IO.File]::WriteAllText($preference, '{broken again')
+    Run-Setup @('v','2','x')
+    Assert ((Get-SettingsView $preference) -eq 'Advanced') 'Simple fallback did not recover to explicit Advanced.'
+    Assert ([IO.File]::ReadAllText($telemetryFile) -ceq $telemetryText) 'View preference repair changed telemetry.'
+    Assert ((Get-WheelField ([IO.File]::ReadAllText($wc)) '0006346e' 'Wheel_Handbrake') -eq 'Axis3&-1.0&1.0') 'View preference repair changed wheel mappings.'
+    Assert ((Get-TelemetryState $telemetryText).enabled -eq '0') 'Reading telemetry must preserve saved Off.'
+    Assert ((Get-TelemetryConnectionSummary (Get-TelemetryState $telemetryText)) -like 'Custom connection*') 'A custom destination must not be described as defaults.'
+    $preset = Set-TelemetryFields $telemetryText @{ host='127.0.0.1'; port='5300'; format='fh4' }
+    Assert ((Get-TelemetryConnectionSummary (Get-TelemetryState $preset)) -like '*fresh-installer*') 'Default comparison must name its reference preset.'
+    $gravelPreset = Set-TelemetryFields $telemetryText @{ host='127.0.0.1'; port='5300'; format='fm7' }
+    Assert ((Get-TelemetryConnectionSummary (Get-TelemetryState $gravelPreset)) -like '*shipped Gravel*') 'Gravel preset must not be conflated with installer preset.'
+    foreach ($badAddress in 'localhost','::1','1.2.3','999.0.0.1','127.00.0.1','0.0.0.0','255.255.255.255','224.0.0.1') {
+        Assert-Throws { Assert-TelemetryConnection $badAddress '5300' 'fh4' } "Invalid destination accepted: $badAddress"
+    }
+    foreach ($badPort in '0','65536','-1','5.5','abc','9999999999999') {
+        Assert-Throws { Assert-TelemetryConnection '127.0.0.1' $badPort 'fh4' } "Invalid port accepted: $badPort"
+    }
+    Assert-Throws { Assert-TelemetryConnection '127.0.0.1' '5300' 'unknown' } 'Unknown receiver format must not be silently mapped.'
+    Assert-Throws { Set-TelemetryFields $telemetryText @{ port='8000' } } 'Connection fields must apply together.'
+    Assert-Throws { Set-TelemetryFields $telemetryText @{ gain='1.0' } } 'Telemetry edit must not alter a tune.'
+    Assert-Throws { Get-TelemetryState ($telemetryText + "[telemetry]`r`nenabled=1`r`n") } 'Ambiguous sections must not be edited.'
+    Assert-Throws { Get-TelemetryState ($telemetryText.Replace('enabled=0',"enabled=0`r`nenabled=1")) } 'Ambiguous fields must not be edited.'
+    $malformed = $telemetryText.Replace('192.0.2.25','localhost')
+    Assert ((Get-TelemetryConnectionSummary (Get-TelemetryState $malformed)) -like '*needs review*') 'Malformed connection needs a visible recovery summary.'
+    Assert-Throws { Set-TelemetryFields $malformed @{ enabled='1' } } 'Cannot enable an unusable receiver.'
+    Assert ((Get-TelemetryState (Set-TelemetryFields $malformed @{ enabled='0' })).host -eq 'localhost') 'Saving Off must preserve an unknown custom destination.'
+    $caseText = $telemetryText.Replace('[telemetry]','[Telemetry]').Replace('host=','Host =')
+    $caseChanged = Set-TelemetryFields $caseText @{ host='127.0.0.1'; port='5300'; format='fh4' }
+    Assert ($caseChanged.Contains('Host =127.0.0.1')) 'Editing must preserve existing key spelling and spacing.'
+    Assert ($caseChanged.Contains('owner_custom=keep this')) 'Unknown custom fields must remain.'
+    $lock = [IO.File]::Open($telemetryFile, 'Open', 'Read', 'None')
+    try { Assert-Throws { Save-TelemetryConfig $telemetryFile $telemetryText $preset } 'Denied telemetry save must report failure.' }
+    finally { $lock.Dispose() }
+    Assert ([IO.File]::ReadAllText($telemetryFile) -ceq $telemetryText) 'Denied telemetry save changed saved settings.'
+    $telemetryBackup = Save-TelemetryConfig $telemetryFile $telemetryText $preset
+    Assert ([IO.File]::ReadAllText($telemetryBackup) -ceq $telemetryText) 'Telemetry save must back up the complete previous file.'
+    Assert-Throws { Save-TelemetryConfig $telemetryFile $telemetryText $preset } 'Concurrent telemetry edits must not be overwritten.'
+    [IO.File]::WriteAllText($telemetryFile, $telemetryText)
+    Run-Setup @('5','a','h','192.0.2.100','p','9456','f','1','c','v','1','x')
+    Assert ([IO.File]::ReadAllText($telemetryFile) -ceq $telemetryText) 'Cancelling a connection draft changed saved settings.'
+    Run-Setup @('5','a','h','localhost','a','c','x')
+    Assert ([IO.File]::ReadAllText($telemetryFile) -ceq $telemetryText) 'Invalid Apply changed saved settings.'
+    $lock = [IO.File]::Open($telemetryFile, 'Open', 'Read', [IO.FileShare]::ReadWrite)
+    try { Run-Setup @('5','a','p','8001','a','c','x') }
+    finally { $lock.Dispose() }
+    Assert ([IO.File]::ReadAllText($telemetryFile) -ceq $telemetryText) 'Failed atomic Apply changed the previous settings.'
+    Assert (@(Get-ChildItem $telemetryFolder -Filter '.telemetry-*.tmp').Count -eq 0) 'Failed Apply left a draft file behind.'
+    Run-Setup @('5','a','h','192.0.2.100','p','9456','f','1','a','v','1','x')
+    $applied = [IO.File]::ReadAllText($telemetryFile)
+    $appliedState = Get-TelemetryState $applied
+    Assert ($appliedState.host -eq '192.0.2.100' -and $appliedState.port -eq '9456' -and $appliedState.format -eq 'fh4') 'Atomic connection Apply did not update all requested fields.'
+    Assert ($appliedState.enabled -eq '0') 'Connection Apply must retain saved Off.'
+    Assert ($applied.Contains('owner_custom=keep this') -and $applied.Contains('gain=0.25') -and $applied.Contains('rate=50')) 'Connection Apply changed unknown settings, tune or rate.'
+    Run-Setup @('5','n','x')
+    $enabledText = [IO.File]::ReadAllText($telemetryFile)
+    Assert ((Get-TelemetryState $enabledText).enabled -eq '1') 'Simple On did not persist for the next launch.'
+    Assert ($enabledText.Replace('enabled=1','enabled=0') -ceq $applied) 'Simple On changed connection or custom fields.'
+    Run-Setup @('5','o','x')
+    Assert ([IO.File]::ReadAllText($telemetryFile) -ceq $applied) 'Simple Off did not restore only its saved preference.'
 
     $game = Join-Path $fixture 'game-binaries'
     [IO.Directory]::CreateDirectory($game) | Out-Null

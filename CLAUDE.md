@@ -45,6 +45,11 @@ Presentation state lives in LocalAppData, separately from game configuration.
 `tools/SetupUx.psm1` owns pure view/mapping helpers; do not couple view choice to
 runtime defaults or device selection. `Install.ps1` preserves existing tuning
 unless a specific override was supplied. Ordinary uninstall retains settings.
+The Telemetry page reads the selected game's installed INI, supports saved
+Off/On in Simple, and applies Advanced connection drafts atomically. The native
+sender calls `loadConfig()` only once from `proxyInit()`, so label these settings
+for the **next game launch**, never live delivery/stop controls. Its unchanged
+`inet_pton(AF_INET)` route accepts IPv4 addresses, not DNS names or IPv6.
 
 Offline checks (synthetic input-reader process and disposable fixture only):
 

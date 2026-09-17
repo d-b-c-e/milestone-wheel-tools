@@ -3,6 +3,14 @@
 Guidance: dbce-wheel-mod-toolkit **a84bebab5ec2abdcd5140b9c63c139ccff86a7d3**,
 UX-1 / UX-01-S and its controls/cameras and installation companion documents.
 Source baseline: **411f351**, toolkit runtime pin **v0.8.0**, unchanged.
+Initial implementation: **4ac0f117265ddf4d846f0d699e5d4bf3d7add3db**.
+The follow-up closes the saved-telemetry editor and malformed-view recovery gaps.
+Also compared with the toolkit's `docs/reference/wheel-settings.html` on
+2026-09-17 (SHA256
+`cd64239d2a4f092a69d74d05fe8a85e915509fd8686d19a7df2cf18ac8323996`).
+Its page order, labels, Simple/Advanced placement and Apply/Cancel behavior
+guide this surface; terminal rendering and next-launch-only status are explicit
+exceptions to the browser illustration, not claims of in-game UI compliance.
 
 ## Scope and status
 
@@ -40,12 +48,29 @@ save leaves buttons unavailable unless using the verified Gravel defaults.
   binding changes until accepted. Axis and button handbrake fields stay
   independent, including cancellation. Button conflicts/shared game slots are
   reported before acceptance.
-- Working mappings are staged until Save and exit, then saved atomically with
+- Working mappings are staged until Save mappings and exit, then saved atomically with
   a dated backup. Failed writes and concurrent file changes keep the old file.
 - The input-reader helper is found in the shipped `dist/` folder as well as
   the development path. Duplicate product identities block ambiguous capture.
 - View state is separate LocalAppData JSON. No view action acquires/reopens a
   device, modifies runtime settings, enables FFB or starts telemetry.
+- If the presentation JSON is malformed, startup warns and falls back to Simple
+  without changing the file. Explicitly choosing a view repairs only this
+  presentation file, preserving its exact original bytes in a reported dated
+  backup. Failed repair leaves the invalid file intact for recovery.
+- Simple Telemetry shows saved Off/On, actual receiver/destination and explicit
+  **next game launch; runtime delivery unverified** status. Off/On writes only
+  its saved preference; it is not a live sender stop. The native proxy reads
+  configuration once, guarded by `g_inited` in `src/proxy.cpp:413-424`.
+- Connection settings (Advanced) opens a draft for receiver IPv4 address,
+  port and format. Apply writes all three together with a backup; Cancel writes
+  none. Invalid destination/format, write failure and concurrent edits preserve
+  the old saved configuration. On validates the saved connection first; Off
+  can be saved without replacing an unrecognized destination.
+- IPv4-only validation follows the existing `inet_pton(AF_INET)` sender in
+  `src/telemetry.cpp:137-140`; no DNS or IPv6 support is implied. Saved connection
+  matches name their actual reference (fresh installer or shipped Gravel
+  preset). Other connections are explicitly custom or need review.
 - Ordinary updates retain the saved wheel, telemetry Off, custom destinations,
   format and tuning. Explicit installer overrides change only their own field.
   Uninstall retains personal settings and backups by default.
@@ -58,7 +83,7 @@ recorded as gaps; their existence in a text file does not mean UI adoption.
 
 | Setting/action or saved key | Page | Placement | Default/unit and reason | Source/evidence |
 |---|---|---|---|---|
-| View (`View` in LocalAppData settings-view.json) | Header, all pages | Simple and Advanced | Simple when missing/invalid; explicit choice remembered | Get/Save-SettingsView; migration and round-trip fixtures |
+| View (`View` in LocalAppData settings-view.json) | Header, all pages | Simple and Advanced | Simple when missing/invalid; explicit choice remembered; malformed-file repair backs up original bytes | Get/Save-SettingsView; migration, recovery, failed repair and round-trip fixtures |
 | Game and input device selection (`-GamePath`, `-Product`) | Before Setup | Simple | Discover, then directly select from numbered friendly list; no Next-only picker | Startup discovery; synthetic one-device integration |
 | Setup readiness | Setup | Simple | Next missing Steering/Throttle/Brake only; does not claim a drive was verified | First screen integration |
 | Steering (`Wheel_Steer`) | Controls / Setup next step | Simple | Preserve existing; new profile starts unbound | Individual rest/travel flow; calibration fixtures |
@@ -72,20 +97,22 @@ recorded as gaps; their existence in a text file does not mean UI adoption.
 | Profile FFB (`ForceFeedback`) / rotation (`MaxRotationAngle`) | FFB | Advanced only, read-only here | Preserve existing; game owns setup and output | Source; unchanged file checks |
 | Actual FFB enable/strength/device/recovery | FFB | Gap: game-owned controls | Plain capability explanation, no ineffective mod toggle | `src/proxy.cpp` passes effects through; native source unchanged |
 | Bonnet/Bumper and adjustment shortcuts | Cameras | Gap: no implementation | Plain unsupported message, no fake toggle | No mount/input/camera hook; no runtime change |
-| Telemetry enabled/receiver/destination/status | Telemetry | Simple instructions; live controls gap | Installer prints actual saved Off/On, destination and format; setup never claims connection | Installer preservation/override fixtures |
-| Telemetry host, port, format, rate, mirror_port, race_on | Telemetry | Advanced only, existing INI surface | Existing file values kept; explicit Port/Format supported by installer | `games/gravel/milestone_mod.ini`; field-isolation fixtures |
+| Telemetry `enabled`, receiver/destination/status | Telemetry | Simple | Saved Off/On with actual destination; applies next launch only; no runtime-delivery claim | Interactive On/Off, field-isolation and view fixtures |
+| Telemetry `host`, `port`, `format` | Telemetry | Advanced only, draft editor linked from Simple | Apply connection/Cancel; IPv4 and port 1–65535; explicit known receiver list; saved Off retained | Draft cancel, invalid Apply, unknown fields, backup, failed atomic replacement and update fixtures |
+| Telemetry `rate`, `mirror_port`, `race_on` | Telemetry | Advanced only, existing INI surface | Existing values kept; not required for a normal receiver | Config source; connection field-isolation fixtures |
 | Input telemetry axes: steer, throttle, brake, handbrake, clutch | Telemetry | Advanced only, existing INI surface | Existing configured telemetry mapping; setup does not silently rewrite telemetry semantics | Existing config and runtime unchanged |
 | Proxy product/retype/log; FFB gain | Help / FFB | Advanced only, existing INI surface | Preserve existing settings; product override explicit | Installer fixture preserves gain and selected product |
 | FMOD discover, rpm/load/speed/slip/suspension/braking/impact channel names, impact_gain/impact_decay_ms/speed_scale | Telemetry | Advanced only, existing INI surface | Game-adapter diagnostics/scaling, not first-drive choices | Existing Gravel preset; all unchanged |
 | UE4 enabled, rpm/maxrpm/speed/gear property names, speed_scale, gear_offset | Telemetry | Advanced only, existing INI surface | Game-specific adapter settings, not first-drive choices | Existing Gravel preset; all unchanged |
-| Save/exit, exit without saving, save/capture failures | All pages | Simple and Advanced | Save and exit writes once; view preference is independent | Write-lock, concurrent edit, cancel, round-trip fixtures |
+| Save/exit, exit without saving, save/capture failures | All pages | Simple and Advanced | Save mappings and exit writes once; view preference is independent | Write-lock, concurrent edit, cancel, round-trip fixtures |
 | Symptom help / terminal text size | Help | Simple | Uses terminal's native text sizing | Source; DPI readability pending |
 | Support export / broad reset tools | Help | Gap | Existing logs/docs only, no support bundle or bulk reset UI | Not implemented or claimed |
 
-No hidden tuning is edited by this pass. FFB and telemetry pages explain that
-existing game/INI choices remain active; they do not call an old custom tune
-“defaults.” Automatic default-vs-custom summaries remain a gap because the
-external tool does not yet load the whole runtime configuration surface.
+No hidden tuning is edited by this pass. FFB remains game-owned. Telemetry
+shows a quiet custom-connection summary or an identified preset match, while
+preserving unknown keys, channel mappings and rates. A broader comparison of
+all hidden force/adapter tuning is still a gap; the tool never calls that
+uninspected configuration “defaults.”
 
 ## Evidence and remaining acceptance
 
@@ -95,20 +122,27 @@ inert fixture DLL. It covers missing/invalid preferences, persistence, locked
 writes, setting isolation, raw/friendly labels, pedal polarity, ambiguity,
 save backups, concurrent file changes, six-page navigation, view round trips,
 handbrake cancel/save and ordinary/explicit installer updates and uninstall.
+The telemetry extension exercises address/port/format validation, draft
+cancellation, unknown field preservation, connection Apply with saved Off,
+Simple On/Off isolation, case-preserving INI edits and atomic replacement failure
+after the editor has opened. No socket is created by the fixture or setup tool.
+Preference recovery is exercised from malformed JSON through Simple fallback,
+explicit Advanced selection and reload, including a denied replacement that
+preserves the original bytes and a successful byte-for-byte backup.
 
 Validation completed **2026-09-17**, before any game deployment:
 
 | Check | Result |
 |---|---|
-| Windows PowerShell 5.1.26100.9444: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/tests/Test-SetupUx.ps1` | **50 passed** |
-| PowerShell 7.6.5: `pwsh -NoProfile -File tools/tests/Test-SetupUx.ps1` | **50 passed** |
+| Windows PowerShell 5.1.26100.9444: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/tests/Test-SetupUx.ps1` | **106 passed** |
+| PowerShell 7.6.5: `pwsh -NoProfile -File tools/tests/Test-SetupUx.ps1` | **106 passed** |
 | `git diff --check` and PowerShell parsing | Passed |
 | Runtime / vendored / prebuilt DLL diff | No changes |
 
 Local transcripts: `E:\Source\milestone-wheel-tools-ux-20260916-ps51-test.log`
 and `E:\Source\milestone-wheel-tools-ux-20260916-ps7-test.log`. Final fixture
-directories end in `milestone-ux-1a1259ba9b0e475bb774e2c82f0f3d07` (5.1) and
-`milestone-ux-9f7ed04513fc495589b197877e9f6642` (7.6.5) under the user's Temp.
+directories end in `milestone-ux-0af2639d0ebc4e25883b9ddef11daee3` (5.1) and
+`milestone-ux-52624220f854485e964f2f4a62dfe046` (7.6.5) under the user's Temp.
 They contain only generated settings, test code and inert/synthetic binaries.
 
 The native proxy and vendored toolkit were unchanged, so no force smoke or
@@ -125,8 +159,10 @@ Full UX-1 adoption is still blocked by real product work:
    dropdown and lifecycle status required by the shared mod contract.
 4. No added Bonnet/Bumper mounts, camera ownership hooks or numpad/rebinding
    implementation. Only the existing game camera button can be bound.
-5. Telemetry controls remain split between installer and INI. Simple setup has
-   instructions, but no On/Off/preset editor or actual runtime delivery status.
+5. Telemetry's ordinary saved controls and connection editor are implemented;
+   runtime delivery and receiver acknowledgment remain unavailable to this
+   external tool. Rate, mirrors and channel diagnostics remain advanced INI
+   settings. No live sender-control or receiver test is claimed.
 6. Installer still has older gaps: Python dependency for automatic whitelist
    creation, broad engine-family fallback preset, no full transactional DLL +
    config + whitelist rollback, and no fully bundled release artifact tested
