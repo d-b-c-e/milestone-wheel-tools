@@ -1,5 +1,28 @@
 # Milestone UX adoption — 2026-09-16
 
+## Current deployed scope — 2026-09-19
+
+Version **0.2.0**, package/source **3545810f4fd33647ff19ab87ab02a9aec0afa47a**,
+was installed into **Gravel only** on **2026-09-19T19:14:58Z**. The external
+Simple/Advanced setup tool, input helper and transactional installer are deployed;
+the [deployment receipt](DEPLOYMENT-2026-09-19.md) records exact payload, package,
+backup and preserved owner-state hashes. Other Milestone games remain research
+candidates and are not accepted by the supported installer.
+
+Controls provides **Bind / Save binding / Cancel** and read-only device preview.
+It does not write endpoint, centre or deadzone calibration; Gravel owns those
+settings. FFB and cameras also remain game-owned, with no mod F6 panel, Stop FFB
+or added camera mounts. Telemetry changes apply at the next game launch.
+
+The existing MOZA R12 hardware evidence is dated **2026-08-30**. The new setup
+and rebuilt package have offline fixture and installation evidence, not physical
+capture/preview, game-final calibration, driving or force acceptance. The dated
+initial-stage sections below preserve earlier decisions and receipts; they do
+not override this deployed status. This documentation correction changes no
+package, installer artifact, native binary or owner configuration.
+
+## Historical initial setup stages — 2026-09-16–17
+
 Guidance: dbce-wheel-mod-toolkit **a84bebab5ec2abdcd5140b9c63c139ccff86a7d3**,
 UX-1 / UX-01-S and its controls/cameras and installation companion documents.
 Source baseline: **411f351**, toolkit runtime pin **v0.8.0**, unchanged.
@@ -14,15 +37,20 @@ Its page order, labels, Simple/Advanced placement and Apply/Cancel behavior
 guide this surface; terminal rendering and next-launch-only status are explicit
 exceptions to the browser illustration, not claims of in-game UI compliance.
 
-## Scope and status
+## Historical scope and status — 2026-09-16–17
 
 The supported player interface is `WheelSetup.ps1`, an external terminal tool,
 plus `Install.ps1` / `Uninstall.ps1`. There is no in-game UI renderer, F6 hook,
 mod FFB output controller, or added camera layer in this repository. This pass
 improves that actual surface. It does **not** certify full shared UX compliance.
-No game was launched, deployed to, or physically tested during this pass.
+No game was launched, deployed to, or physically tested during these initial
+stages. Deployment followed on September 19, as recorded above and below.
 
-| Product | Current evidence | Scope of this change |
+This table preserves the initial discovery research. Entries for other games
+were not compatibility evidence and do not describe the current Gravel-only
+installer's supported targets.
+
+| Product | Evidence at the initial stage | Scope of the initial change |
 |---|---|---|
 | Gravel | Existing hardware verification: MOZA R12, 2026-08-30; one checked-in game preset | External setup and installer changes; new UI interaction covered by fixtures, physical revalidation pending |
 | MXGP3, MXGP PRO | Installer discovery entries; no checked-in game preset or hardware verification | Same external tool available; do not claim a tested drive or reuse Gravel action defaults |
@@ -36,7 +64,7 @@ silently. Save discovery is limited to the selected game; an ambiguous/missing
 save leaves buttons unavailable unless using the verified Gravel defaults.
 `-SettingsSave` selects an exact save for advanced troubleshooting.
 
-## Implemented experience
+## Implemented experience — current external tool
 
 - Double-click Install.bat → WheelSetup.bat → Simple Setup. Steering, Throttle
   and Brake are the required assignments; handbrake/clutch/buttons are optional.
@@ -55,7 +83,7 @@ save leaves buttons unavailable unless using the verified Gravel defaults.
 - One input-only helper process owns each preview, capped at 10 seconds.
   Esc, native exit, device error, lost sample heartbeat and a supervised timeout all clean up the
   process and return; no mappings, telemetry or presentation state are saved.
-  The same process owner handles calibration captures. Preview checks the
+  The same process owner handles binding captures. Preview checks the
   selected game is still closed before reading input.
 - Esc cancels active input capture; every proposal has a cancel path. No
   binding changes until accepted. Axis and button handbrake fields stay
@@ -88,22 +116,24 @@ save leaves buttons unavailable unless using the verified Gravel defaults.
   format and tuning. Explicit installer overrides change only their own field.
   Uninstall retains personal settings and backups by default.
 
-## Placement inventory
+## Placement inventory — current external tool
 
 All rows apply to the external tool. Advanced includes the same ordinary
 actions in the same order. Fields unavailable in this tool are classified and
 recorded as gaps; their existence in a text file does not mean UI adoption.
+Binding captures direction/polarity only. Endpoint, centre and deadzone
+calibration remains in Gravel; preview percentages are device normalization.
 
 | Setting/action or saved key | Page | Placement | Default/unit and reason | Source/evidence |
 |---|---|---|---|---|
 | View (`View` in LocalAppData settings-view.json) | Header, all pages | Simple and Advanced | Simple when missing/invalid; explicit choice remembered; malformed-file repair backs up original bytes | Get/Save-SettingsView; migration, recovery, failed repair and round-trip fixtures |
 | Game and input device selection (`-GamePath`, `-Product`) | Before Setup | Simple | Discover, then directly select from numbered friendly list; no Next-only picker | Startup discovery; synthetic one-device integration |
 | Setup readiness | Setup | Simple | Next missing Steering/Throttle/Brake only; does not claim a drive was verified | First screen integration |
-| Steering (`Wheel_Steer`) | Controls / Setup next step | Simple | Preserve existing; new profile starts unbound | Individual rest/travel flow; calibration fixtures |
+| Steering (`Wheel_Steer`) | Controls / Setup next step | Simple | Preserve existing; new profile starts unbound | Individual rest/travel binding flow; polarity fixtures |
 | Throttle (`Wheel_Accelerator`), Brake (`Wheel_Brake`) | Controls / Setup next step | Simple | Preserve existing; no inherited unverified bindings | High/low-rest and ambiguous/no-movement fixtures |
 | Handbrake axis (`Wheel_Handbrake`) | Controls | Simple | Optional; independent of game button slot | Accept/cancel integration; button-preservation checks |
 | Clutch (`Wheel_Clutch`) | Controls | Simple on demand | Optional, individually selected | Same axis workflow; physical behavior not tested |
-| Axis direction/inversion, Bind / Clear / Save calibration / Cancel | Controls | Simple on demand | Measured direction; retains previous assignment on cancel | Capture and file fixtures; live Esc key not physically exercised |
+| Axis direction/inversion, Bind / Clear / Save binding / Cancel | Controls | Simple on demand | Measured polarity only; retains previous assignment on cancel; game owns endpoint/centre/deadzone calibration | Capture and file fixtures; live Esc key not physically exercised |
 | Preview device input | Controls | Simple on demand; raw values Advanced only | Read-only, 10 seconds/Esc, staged mappings; fixed device-range normalization, not game-final input | Centre/left/right, inverted released/full, clamping, custom-unavailable, staged polarity, disconnect/cancel/timeout cleanup and no-write fixtures |
 | Gear up/down, Handbrake button, Rewind, Pause, Confirm, Back, Respawn, Photo mode (resolved Wheel_* slots) | Controls | Simple on demand | Existing game actions; friendly labels and 1-based button numbers | Action resolution source; shared-slot warning; real button capture not tested |
 | Change camera (`SwitchCamera` resolved slot) | Cameras and Controls | Simple on demand | Same shared binding operation | Menu fixture; stock game camera cycle unchanged |
@@ -128,7 +158,7 @@ preserving unknown keys, channel mappings and rates. A broader comparison of
 all hidden force/adapter tuning is still a gap; the tool never calls that
 uninspected configuration “defaults.”
 
-## Evidence and remaining acceptance
+## Historical setup validation — 2026-09-17
 
 `tools/tests/Test-SetupUx.ps1` runs disposable file fixtures and a synthetic
 console input-reader executable; it never calls DirectInput or loads the
@@ -167,7 +197,11 @@ They contain only generated settings, test code and inert/synthetic binaries.
 The native proxy and vendored toolkit were unchanged, so no force smoke or
 native DLL build was required for this script/UI change.
 
-Full UX-1 adoption is still blocked by real product work:
+### Initial gap assessment — 2026-09-17
+
+This assessment predates the bundled installer and deployment. Items 1–5 remain
+capability/acceptance limits; item 6 was closed by the September 19 delivery
+follow-up below. It is retained here as the original scope, not current work:
 
 1. No F6 in-game renderer. This is an intentional bounded surface exception for
    this pass, not completion of the shared runtime UI requirement.
