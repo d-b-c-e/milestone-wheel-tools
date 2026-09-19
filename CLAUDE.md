@@ -27,7 +27,7 @@ Four modules in one DLL. They are independent and can be worked on separately.
 | `src/fmod_tap.cpp` | engine-audio parameters | hooks the delay-load IAT |
 | `src/ue4.cpp` | RPM / gear from the HUD | UE4 reflection, no signatures |
 | `src/telemetry.cpp` | assemble and send packets | 60 Hz thread, reads shared atomics |
-| `WheelSetup.ps1` | map controls, calibrate pedals | drives `tools/wheelprobe`, parses `settings.sav` |
+| `WheelSetup.ps1` | bind axes/buttons and preview input | drives `tools/wheelprobe`, parses `settings.sav` |
 | `tools/wheelprobe/` | live 128-button / 8-axis reader | `c_dfDIJoystick2`, which PowerShell cannot reach |
 
 All taps are **observe-only**. The single thing altered in the game's view of
@@ -62,14 +62,39 @@ Offline checks (synthetic input-reader process and disposable fixture only):
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/tests/Test-SetupUx.ps1
 pwsh -NoProfile -File tools/tests/Test-SetupUx.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/tests/Test-InstallPackage.ps1
+pwsh -NoProfile -File tools/tests/Test-InstallPackage.ps1
 ```
 
 These check file migration, capture cancellation and terminal navigation, not
 physical input, terminal readability at different DPI, force output or a drive.
 
-```bash
-./build.sh                    # -> build/dinput8.dll (x64, MSYS2 MinGW-w64 GCC 16)
+```powershell
+.\build.ps1 -UpdateDist       # x64 proxy + input helper, PE/export/import checks
+# Commit source and dist before making an attributable package:
+.\tools\Package.ps1          # complete ZIP and per-file SHA256 manifest
 ```
+
+The 0.2.0 package supports **Gravel only**. `Install.ps1` requires its shipping
+executable and preserves existing config/profile bytes. `tools/InstallPackage.psm1`
+preflights all targets, backs up before writes, uses atomic replacement and rolls
+back partial changes. It also creates an empty-binding whitelist profile without
+Python when the existing verified G920 template is present. The owned setup tool
+is deployed to `DBCE-Wheel-Setup` beside the game exe; the game-root launcher passes
+the exact game/config paths. Uninstall uses the receipt hashes to leave edited
+files alone. No game assets or owner configurations enter the distributable.
+Install requires the generated manifest and checks product/version/source commit,
+the exact expected file set and every SHA256 before discovery or mutation.
+Uninstall backs up all planned removals first and restores completed deletions
+if a later file is locked. Both install and removal rollback respect the closed
+game guard and preserve externally changed files, reporting recovery backups.
+
+The profile adapter has **no endpoint/centre/deadzone writer**. Its known fields
+are `AxisN&scale&offset`, wheel rotation limits and bindings. Native input hooks
+observe values; they do not apply calibration. An affine transform alone cannot
+represent independent left/centre/right endpoints or deadzones. Keep the UI at
+Bind / Save binding and distinguish device preview from game-final calibration.
+Do not invent calibration values in `settings.sav`; it is read only for actions.
 
 `lib/toolkit/` is vendored from `E:\Source\dbce-wheel-mod-toolkit` (the shared
 racing-mod core): `include/forza_packet.h` is the Forza encoder `telemetry.cpp`
@@ -85,8 +110,8 @@ The test loop that worked:
 
 ```powershell
 # 1. close the game FIRST - it locks the DLL and rewrites its own configs on exit
-# 2. deploy
-Copy-Item build\dinput8.dll "<game>\Binaries\Win64\dinput8.dll" -Force
+# 2. deploy from the complete, verified package
+.\Install.ps1 -Game Gravel
 # 3. launch, drive, then read the log next to the game exe
 ```
 
@@ -212,7 +237,8 @@ Each of these cost real time and none produces an error message.
    It lists every FMOD parameter with its range and every property of the class
    holding RPM.
 2. Put the right names in a new `games/<name>/milestone_mod.ini`.
-3. Add it to `$KNOWN` in `Install.ps1` (Steam appid, folder, exe prefix).
+3. Add a verified discovery/layout/preset adapter and fixtures before widening
+   the installer's Gravel-only support gate.
 4. Record verified values in `games/<name>/README.md`.
 
 Expect the FMOD names to differ per title but the *approach* to hold: high call

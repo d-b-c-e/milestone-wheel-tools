@@ -134,9 +134,19 @@ class FixtureProbe {
     Copy-Item (Join-Path $repo 'Install.ps1') $fixture
     Copy-Item (Join-Path $repo 'Uninstall.ps1') $fixture
     Copy-Item (Join-Path $repo 'tools\SetupUx.psm1') (Join-Path $fixture 'tools')
+    Import-Module (Join-Path $repo 'tools\InstallPackage.psm1') -Force
+    foreach ($relative in Get-PackageFiles) {
+        if ($relative -in @('dist\wheelprobe.exe','lib\toolkit\powershell\DbceWheel.psm1')) { continue }
+        $target = Join-Path $fixture $relative
+        [IO.Directory]::CreateDirectory((Split-Path $target -Parent)) | Out-Null
+        Copy-Item -LiteralPath (Join-Path $repo $relative) -Destination $target
+    }
     Copy-Item (Join-Path $repo 'games\gravel\milestone_mod.ini') (Join-Path $fixture 'games\gravel')
     [IO.File]::WriteAllText((Join-Path $fixture 'lib\toolkit\powershell\DbceWheel.psm1'), 'function Get-SteamLibraries { @() }; Export-ModuleMember -Function Get-SteamLibraries')
     [IO.File]::WriteAllText((Join-Path $fixture 'dist\dinput8.dll'), 'milestone_mod fixture - never loaded')
+    $fixtureFiles = @(Get-PackageFiles | ForEach-Object { [pscustomobject]@{ Path=$_.Replace('\','/'); SHA256=(Get-FileHash -LiteralPath (Join-Path $fixture $_)).Hash } })
+    $fixtureManifest = @{ Product='milestone-wheel-tools'; Version=([IO.File]::ReadAllText((Join-Path $fixture 'VERSION'))).Trim(); SourceCommit=('a'*40); Files=$fixtureFiles }
+    [IO.File]::WriteAllText((Join-Path $fixture 'package-manifest.json'), ($fixtureManifest | ConvertTo-Json -Depth 6))
     function Read-Host($Prompt) {
         if (-not $global:MilestoneUxFixtureAnswers.Count) { throw "Fixture prompt was not expected: $Prompt" }
         $value = $global:MilestoneUxFixtureAnswers.Dequeue()
@@ -265,6 +275,7 @@ class FixtureProbe {
 
     $game = Join-Path $fixture 'game-binaries'
     [IO.Directory]::CreateDirectory($game) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $game 'gravel-Win64-Shipping.exe'), 'inert fixture, never run')
     $config = Join-Path $game 'milestone_mod.ini'
     $custom = [IO.File]::ReadAllText((Join-Path $repo 'games\gravel\milestone_mod.ini'))
     $custom = Set-ModSetting $custom 'telemetry' 'enabled' '0'
@@ -280,16 +291,17 @@ class FixtureProbe {
     Assert ((Get-ModSetting $updated 'telemetry' 'enabled') -eq '0') 'Explicit port override enabled telemetry.'
     Assert ((Get-ModSetting $updated 'telemetry' 'host') -eq '192.0.2.25') 'Explicit port override changed host.'
     Assert ((Get-ModSetting $updated 'ffb' 'gain') -eq '0.25') 'Explicit port override changed tune.'
-    Assert (@(Get-ChildItem $game -Filter '*.bak-*').Count -eq 1) 'Explicit update did not create one settings backup.'
+    Assert (@(Get-ChildItem (Join-Path $game 'DBCE-Wheel-Backups') -Directory).Count -eq 2) 'Each install must retain its transaction backup.'
     & (Join-Path $fixture 'Uninstall.ps1') -GamePath $game
     Assert (-not (Test-Path (Join-Path $game 'dinput8.dll'))) 'Uninstall must remove its own proxy.'
     Assert ([IO.File]::ReadAllText($config) -ceq $updated) 'Ordinary uninstall must retain personal settings.'
-    Assert (@(Get-ChildItem $game -Filter '*.bak-*').Count -eq 1) 'Ordinary uninstall must retain backups.'
+    Assert (@(Get-ChildItem (Join-Path $game 'DBCE-Wheel-Backups') -Directory).Count -eq 3) 'Ordinary uninstall must retain install backups and add a removal backup.'
     [IO.File]::WriteAllText((Join-Path $game 'dinput8.dll'), 'another proxy')
     & (Join-Path $fixture 'Uninstall.ps1') -GamePath $game
     Assert ([IO.File]::ReadAllText((Join-Path $game 'dinput8.dll')) -eq 'another proxy') 'Uninstall must preserve another proxy.'
     $freshGame = Join-Path $fixture 'fresh-game'
     [IO.Directory]::CreateDirectory($freshGame) | Out-Null
+    [IO.File]::WriteAllText((Join-Path $freshGame 'gravel-Win64-Shipping.exe'), 'inert fixture, never run')
     & (Join-Path $fixture 'Install.ps1') -GamePath $freshGame -SkipWheelConfig -Product '11112222'
     $fresh = [IO.File]::ReadAllText((Join-Path $freshGame 'milestone_mod.ini'))
     Assert ((Get-ModSetting $fresh 'proxy' 'product') -eq '11112222') 'Fresh install must use the chosen wheel.'

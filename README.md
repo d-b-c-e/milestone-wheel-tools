@@ -1,23 +1,24 @@
 # milestone-wheel-tools
 
-**Make direct-drive wheels work with Milestone's UE4 racing games — and add the
-telemetry they never shipped.**
+**Wheel setup and telemetry for Gravel, with research tools for other Milestone games.**
 
-Gravel, MXGP, MotoGP, Ride and Supercross all refuse modern direct-drive
-wheels, have a rebind screen that cannot be used with one, and expose **no
-telemetry at all**. This fixes all three from the outside.
+The supported package makes modern direct-drive wheels selectable in Gravel,
+provides an external control-binding tool, and sends telemetry to compatible
+Forza receivers. Other Milestone titles remain unverified research candidates.
 
 | you want | run |
 |---|---|
 | the game to see your wheel, and telemetry in SimHub | double-click `Install.bat` |
-| to map controls without fighting the in-game menu | double-click `WheelSetup.bat` |
+| to map controls without fighting the in-game menu | open `Wheel settings.bat` in Gravel's game folder |
 
-Both detect your wheel and find the game themselves. **Gravel is the verified
-game; the other Milestone titles below are still unverified candidates.**
+The installer finds Gravel through Steam and preserves its saved wheel identity
+on updates. A fresh install asks you to choose if several eligible wheels are
+connected. The setup tool can also be opened directly with `WheelSetup.bat`.
 
 ## First drive
 
-Close the game, run **Install.bat**, then open **WheelSetup.bat**. Setup opens in
+Close the game, extract the complete ZIP, run **Install.bat**, then open
+**Wheel settings.bat** in Gravel's game folder. Setup opens in
 **Simple**: bind Steering, Throttle and Brake, add any handbrake or buttons you
 use, then **Save mappings and exit**. Run the game's own wheel calibration once and drive.
 Telemetry is optional. **Simple → Telemetry** shows the saved Off/On choice,
@@ -29,7 +30,7 @@ The six pages are **Setup, Controls, FFB, Cameras, Telemetry, Help**. Use
 choice is remembered; switching views changes no bindings, tune or telemetry.
 If a damaged view preference is reported, explicitly select Simple or Advanced
 to repair it; the previous file is backed up and its location is shown.
-Button numbers start at 1. Each axis has its own bind/calibration flow, so an
+Button numbers start at 1. Each axis has its own binding flow, so an
 optional clutch or handbrake never holds up basic setup. Cancel keeps the
 previous assignment; the final Save mappings and exit writes the pending mappings.
 Before saving, **Controls → Preview device input** lets you check the staged
@@ -101,37 +102,44 @@ it up with no integration work.
 Verified with a MOZA R12: working speedometer and tachometer in SimHub, with
 speed, RPM, gear, pedals, wheel slip and suspension travel all live.
 
-MXGP, MotoGP, Ride and Supercross share the engine and should need only new
-parameter names in the ini — see *Adapting to another game* below.
+MXGP, MotoGP, Ride and Supercross are research candidates. Shared engine
+technology does not establish compatible input, reflection or telemetry hooks.
+The installer accepts Gravel only.
 
 ## Install
 
-**Recommended.** Download `dinput8.dll` from [Releases](../../releases) into
-`dist\`, then:
+Extract the **whole package**, then double-click **Install.bat**, or run:
 
 ```powershell
 .\Install.ps1
 ```
 
-It finds your game in any Steam library (reading the registry, so it works
-wherever Steam actually lives), detects your wheel and derives its product key,
-installs the DLL and a matching config, adds the wheel to the game's device
-whitelist, and prints exactly what to select in SimHub. Close the game first —
-it locks the files.
+It finds Gravel in Steam, installs the DLL and the complete external setup tool,
+and creates **Wheel settings.bat** in the game's main folder. No Python,
+compiler or SDK is needed. Existing INIs and wheel profiles are preserved byte
+for byte unless an explicit override is supplied. New wheel profiles start
+with empty bindings; the setup tool measures your assignments.
+
+Every install backs up existing targets under **DBCE-Wheel-Backups** beside the
+shipping executable. A failed write restores earlier files from that transaction.
+Close the game first; the installer rechecks before each write. The installed
+setup files and their hashes are listed in **milestone_install.json**.
+The complete package manifest is required and every payload hash is checked
+before discovery or changes. Source developers must package before installing.
 
 Advanced installer switches (ordinary updates keep existing settings):
 
 ```powershell
 .\Install.ps1 -Port 8000 -Format fh4              # match your SimHub setup
-.\Install.ps1 -Game Gravel                        # skip the menu
-.\Install.ps1 -GamePath "D:\...\Binaries\Win64"   # a game it doesn't know
+.\Install.ps1 -Game Gravel                        # supported game
+.\Install.ps1 -GamePath "D:\...\gravel\Binaries\Win64" # explicit Gravel folder
 .\Install.ps1 -Product 0006346e                   # if it picks the wrong device
 ```
 
-**Manually**, if you prefer: copy `dinput8.dll` and a
-`games\<game>\milestone_mod.ini` next to the game's shipping executable — for
-UE4 that is `<game>\<game>\Binaries\Win64\`, **not** the game's root folder —
-and set `product=` to your wheel's DirectInput key.
+The runtime DLL belongs beside `gravel-Win64-Shipping.exe` in
+`Gravel\gravel\Binaries\Win64`; the launcher belongs in `Gravel`.
+Keep the complete package when moving or reinstalling; copying the DLL alone
+omits control setup, documentation and update recovery.
 
 ⚠️ Only one `dinput8.dll` can live in a folder. FFB Arcade Plugin, DevReorder
 and similar tools use the same name; the installer refuses to overwrite a
@@ -155,7 +163,7 @@ detects your wheel, and then:
 
 - **Controls → Steering / Throttle / Brake / Handbrake (axis) / Clutch** — select
   only the input you want to bind. Measure rest and full movement, check its
-  direction, then Save calibration or Cancel. Esc cancels a running input
+  direction, then Save binding or Cancel. Esc cancels a running input
   capture. Run the game calibration afterwards for endpoints and deadzones.
 - **Controls → Driving and menu buttons** — choose *Rewind*, *Change camera*
   or another action, press the button, then save or cancel. A handbrake button
@@ -221,17 +229,25 @@ backups and wheel bindings are kept for a future reinstall. Updates also keep
 existing tuning, telemetry Off/On, custom destinations and the saved wheel;
 explicit `-Port`, `-Format` or `-Product` switches update only those choices.
 
-Or delete `dinput8.dll` and `milestone_mod.ini` from the game folder. The
-`WheelConfig.ini` entry is harmless if left, and Steam's *Verify integrity of
-game files* removes it anyway.
+Uninstall removes matching installed files and the launcher. Files edited since
+installation are kept and reported. The `WheelConfig.ini` entry stays; Steam's
+*Verify integrity of game files* restores that file to the game's stock version.
+Uninstall also backs up its planned removals and restores earlier files if a
+later removal fails. If Gravel starts during a transaction, further writes stop
+and the error identifies recovery backups; close the game before recovery.
 
 ## Build
 
-Only needed if you would rather not use the release binary. MSYS2 MinGW-w64
-(GCC 16); adjust the toolchain path at the top of `build.sh`:
+Only needed when working from source. MSYS2 MinGW-w64 GCC 16 is required;
+pass `-Toolchain` to use another bin folder. Build checks x64 format, all six
+proxy exports and missing compiler runtime dependencies, without opening a device.
 
-```bash
-./build.sh          # -> build/dinput8.dll (x64)
+```powershell
+.\build.ps1 -UpdateDist        # build proxy + input helper, refresh dist/
+.\tools\tests\Test-SetupUx.ps1
+.\tools\tests\Test-InstallPackage.ps1
+# Commit source and dist before packaging:
+.\tools\Package.ps1           # complete ZIP + SHA256 manifest in artifacts/
 ```
 
 A 32-bit game needs a 32-bit build. The Forza encoder and the installer's
@@ -244,7 +260,7 @@ under `lib/toolkit` (pinned in `lib/toolkit/VERSION`); bump with
 
 | tool | purpose |
 |---|---|
-| `WheelSetup.ps1` | map controls and calibrate pedals without the in-game menu |
+| `WheelSetup.ps1` | bind axes/buttons and preview device input; game owns endpoints/deadzones |
 | `Install.ps1` / `Uninstall.ps1` | install or remove the mod, detecting game and wheel |
 | `tools/Sync-Toolkit.ps1` | re-vendor the toolkit pieces under `lib/toolkit` |
 | `tools/wheelprobe/` | native helper that reads all 128 buttons and 8 axes live |

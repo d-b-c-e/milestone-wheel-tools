@@ -281,14 +281,14 @@ function Resolve-Slot($Name) {
 function Edit-Axis([string]$Name) {
     $field = $AXES[$Name]
     Head "$Name - $(Assignment (Get-Field $field))"
-    $choice = Read-Host '  [B] Bind / calibrate  [C] Clear  [Enter] Cancel'
+    $choice = Read-Host '  [B] Bind  [C] Clear  [Enter] Cancel'
     if ($choice -eq 'c') {
         if ((Read-Host "  Clear $Name? Type Clear, or Enter to cancel") -eq 'Clear') { Set-Field $field '' }
         return
     }
     if ($choice -ne 'b') { return }
     try {
-        Say '  Finish or cancel this calibration before changing view.' 'DarkGray'
+        Say '  Finish or cancel this binding before changing view.' 'DarkGray'
         Say '  Keep other controls still. Esc cancels input capture.'
         if ($Name -eq 'Steering') { $prompt = 'Centre the wheel' }
         else { $prompt = 'Release this pedal or handbrake' }
@@ -301,12 +301,12 @@ function Edit-Axis([string]$Name) {
         Say "  Detected: $(Assignment $mapping.Value)"
         Say '  This sets the axis and its direction. Finish endpoint/deadzone calibration in the game.'
         if ($View -eq 'Advanced') { Say "  Raw rest: $($mapping.Rest); full: $($mapping.Full)" }
-        $choice = Read-Host '  [S] Save calibration  [I] Invert direction  [Enter] Cancel'
+        $choice = Read-Host '  [S] Save binding  [I] Invert direction  [Enter] Cancel'
         if ($choice -eq 'i') {
             $mapping.Inverted = -not $mapping.Inverted
             $polarity = if ($mapping.Inverted) { '-1.0&1.0' } else { '1.0&0.0' }
             $mapping.Value = "Axis$($mapping.Axis + 1)&$polarity"
-            $choice = Read-Host "  $(Assignment $mapping.Value). [S] Save calibration  [Enter] Cancel"
+            $choice = Read-Host "  $(Assignment $mapping.Value). [S] Save binding  [Enter] Cancel"
         }
         if ($choice -eq 's') { Set-Field $field $mapping.Value; Ok "$Name ready to save" }
         else { Say '  Cancelled. The previous assignment was kept.' }
@@ -497,8 +497,8 @@ while ($true) {
             } catch { Warn $_.Exception.Message; Say '  No telemetry setting has been changed.' }
         }
         'Help' {
-            Say '  Close the game before setup. Select an axis to bind/calibrate; Save mappings and exit writes a backup.'
-            Say '  No movement? Reconnect the device and reopen setup. Wrong direction? Recalibrate that axis.'
+            Say '  Close the game before setup. Select an axis to bind; Save mappings and exit writes a backup.'
+            Say '  No movement? Reconnect the device and reopen setup. Wrong direction? Bind that axis again and invert its direction.'
             Say '  Gravel is hardware-verified. Other Milestone games still need validation.'
             Say '  The tool uses the terminal text size. Ctrl+C exits without saving pending mappings.'
             Say '  F6 is not available in this mod. Reopen WheelSetup.bat to change controls.'

@@ -194,3 +194,81 @@ button handbrake, hot unplug, game first drive, FFB feel, 720p/4K terminal
 readability, real Steam discovery with several installed games, or each
 unverified game's wheel/action semantics. The fixture checks do not establish
 those outcomes. Continue from this audit before calling the product reconciled.
+
+## Delivery follow-up — 2026-09-19
+
+The 0.2.0 follow-up closes the packaging/installer gaps listed in item 6 above.
+It builds and distributes the complete external setup tool, its input helper,
+required PowerShell modules and player help. Install.bat creates Wheel settings.bat
+in Gravel's main folder. Fresh whitelist creation no longer needs Python; new
+profiles keep bindings empty until the user binds them. Existing profile and
+INI bytes survive ordinary updates exactly. Dated backup manifests precede
+transactional replacements, and partial failure rolls back completed writes.
+A running-game guard also protects rollback; if the game starts midway, the
+error identifies backups and stops writes until the game is closed. Receipt
+hashes let uninstall retain files subsequently edited by the owner. The complete
+package manifest is mandatory and its identity, exact path set and hashes are
+validated before discovery or changes. Uninstall backs up all planned removals
+and rolls back completed deletions if a later file is locked. External replacements
+remain untouched during rollback. These close two independently reviewed
+delivery findings before the real installation.
+
+The package supports **Gravel only**. Earlier discovery entries for MXGP3,
+MXGP PRO, MotoGP18/19 and Supercross were not evidence of support and are no
+longer accepted by Install.ps1. The existing external tool remains useful for
+explicit development paths, but other games require a verified adapter and
+preset before installer support. This machine has only Gravel among the
+previously listed installer targets.
+
+### Placement inventory additions
+
+| Option / action | Placement | Scope |
+|---|---|---|
+| Install / Update | Install.bat, ordinary player entry | Discovers Gravel, preserves existing settings and creates backups |
+| Wheel settings launcher | Game root | Opens the exact deployed configuration in the external Simple view |
+| Binding axis + polarity | Simple Controls | Bind / Save binding / Cancel; no full-calibration claim |
+| Endpoint / centre / deadzone calibration | Gravel's own controls | Adapter constraint below; not editable or verified by preview |
+| Port / format / wheel identity install override | Advanced PowerShell arguments | Only explicitly supplied fields change |
+| Install receipt / backup manifest / package hashes | Advanced diagnostics | Recovery and exact artifact provenance |
+| Uninstall | Installed or packaged Uninstall.bat | Removes matching owned files, retains owner settings and edited files |
+
+### Calibration adapter constraint
+
+Read-only inspection of the installed Gravel build 3477925 profile on
+2026-09-19 found `AxisN&scale&offset`, `MaxRotationAngle` and
+`MinRotationAngle`, but no raw endpoint, centre or deadzone fields. The existing
+MOZA profile is already present. Stock axis transforms are normal (1, 0) or
+inverted (-1, 1). An arbitrary affine transform could rescale one interval;
+it cannot represent independent left/centre/right endpoints or deadzones.
+`src/proxy.cpp` observes GetDeviceState and retypes the device; it does not
+transform game input. `settings.sav` is read for action names only, with no
+verified calibration writer. Consequently this pass keeps game calibration in
+Gravel, changes the misleading Save calibration label to Save binding, and
+does not invent an unverified native transform or binary-save editor.
+
+The native source and toolkit v0.8.0 pin remain unchanged. Both native artifacts
+were rebuilt with GCC 16.2.0; build.ps1 checks x64 PE format, all six proxy
+exports and no unbundled compiler-runtime imports. One existing benign helper
+strncpy truncation warning remains (a static zero-initialized 256-byte name
+buffer receives at most 255 bytes). No native helper or game was executed.
+README and existing CLAUDE working notes were reconciled. This repository has
+no AGENTS.md or CHANGELOG.md to update; the dated audit records this change.
+
+Local delivery evidence and exact source/package/backup hashes are recorded in
+`docs/DEPLOYMENT-2026-09-19.md` after installation. The historical evidence above
+remains scoped to its original date. Physical input, actual Esc/console redraw,
+first drive, telemetry delivery and game-owned FFB/cameras still require an
+attended check; rebuilding/deploying does not establish those outcomes.
+
+2026-09-19 pre-deployment validation: **140 UX/migration checks and 81
+install/package checks passed on both Windows PowerShell 5.1.26100.9444 and
+PowerShell 7.6.5**. Install checks include empty-file preservation, injected
+partial-write rollback, game-start write/rollback guard, concurrent edit
+preservation, Python-free profile creation, unknown-proxy/support gates,
+byte-identical UTF-16 owner INI update, exact installed receipt hashes, incomplete
+or modified package rejection, exact manifest identity/path/count validation,
+and a real locked late uninstall file with full hash-verified restoration.
+Transcripts are `E:\Source\milestone-{ux,install}-20260919-{ps51,ps7}.log`;
+`E:\Source\milestone-build-20260919.log` records the native build. These tests
+execute synthetic readers only; installer/package fixtures never load the real
+DLL or execute the real input helper.
