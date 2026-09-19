@@ -272,3 +272,7 @@ Transcripts are `E:\Source\milestone-{ux,install}-20260919-{ps51,ps7}.log`;
 `E:\Source\milestone-build-20260919.log` records the native build. These tests
 execute synthetic readers only; installer/package fixtures never load the real
 DLL or execute the real input helper.
+
+Local deployment completed on 2026-09-19 from package/source **3545810f**.
+See [the deployment receipt](DEPLOYMENT-2026-09-19.md) for exact artifact,
+backup and owner-state hashes, player entry point and untested runtime checks.
